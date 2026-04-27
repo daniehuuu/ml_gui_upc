@@ -3,16 +3,33 @@ from pathlib import Path
 from shiny import App, ui, render, reactive
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler, RobustScaler
-from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler, RobustScaler
+from sklearn.impute import SimpleImputer
 import io
 import base64
 import json
 import warnings
 warnings.filterwarnings("ignore")
+
+from app_assets import CUSTOM_CSS as APP_CUSTOM_CSS, OPEN_DATASET_PICKER_JS
+from app_helpers import (
+    df_preview_html as build_df_preview_html,
+    html_figure as render_plotly_html,
+    make_corr_heatmap as build_corr_heatmap,
+    make_distribution_figure as build_distribution_figure,
+    missing_report_html as build_missing_report_html,
+    outlier_report_html as build_outlier_report_html,
+    read_csv_dataset,
+    separator_options as DATA_SEPARATOR_OPTIONS,
+    missing_categories as MISSING_CATEGORIES,
+    missing_category_for_pct,
+    outlier_category_for_pct,
+    get_num_cols,
+    get_cat_cols,
+)
+from app_navigation import sidebar_nav_ui
 
 # ─── CSS ────────────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
@@ -422,7 +439,7 @@ label { color: var(--muted) !important; font-size: 11px !important; font-family:
 
 # ─── UI ────────────────────────────────────────────────────────────────────
 app_ui = ui.page_fluid(
-    ui.tags.style(CUSTOM_CSS),
+    ui.tags.style(APP_CUSTOM_CSS),
     ui.tags.link(rel="stylesheet", href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"),
 
     # ── Header
@@ -445,14 +462,7 @@ app_ui = ui.page_fluid(
             ui.tags.span("ESTADO", class_="sidebar-label"),
             ui.div(ui.output_ui("sidebar_status"), style="padding: 0 16px;"),
 
-                        ui.tags.script("""
-                            function openDatasetPicker(inputId) {
-                                const input = document.getElementById(inputId);
-                                if (input) {
-                                    input.click();
-                                }
-                            }
-                        """),
+                        ui.tags.script(OPEN_DATASET_PICKER_JS),
 
             class_="sidebar"
         ),
@@ -483,20 +493,6 @@ def server(input, output, session):
     ops_log     = reactive.Value([])
     load_config = reactive.Value({"separator": ";", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
 
-    separator_options = {
-        ",": "Coma ( , )",
-        ";": "Punto y coma ( ; )",
-        "\t": "Tab",
-        "custom": "Personalizado",
-    }
-
-    missing_categories = [
-        (0, 0.01, "Trivial", "var(--accent)", "< 1%"),
-        (0.01, 0.05, "Manejable", "#7c8cf8", "[1%, 5%)"),
-        (0.05, 0.15, "Sofisticado", "#f59e0b", "[5%, 15%)"),
-        (0.15, 1.0, "Perjudicial", "var(--accent2)", "> 15%"),
-    ]
-
     def resolve_separator():
         choice = input.load_sep() if hasattr(input, "load_sep") else ";"
         if choice == "custom":
@@ -516,62 +512,25 @@ def server(input, output, session):
         separator = resolve_separator()
         header = resolve_header()
         encoding = resolve_encoding()
-        last_error = None
+        df, trial_encoding, last_error = read_csv_dataset(file_path, separator, header, encoding)
+        if df is None:
+            return None, f"No fue posible leer el archivo con separador {separator!r}. Error: {last_error}"
 
-        for trial_encoding in [encoding, "utf-8", "latin1"]:
-            try:
-                df = pd.read_csv(
-                    file_path,
-                    sep=separator,
-                    header=header,
-                    encoding=trial_encoding,
-                    engine="python",
-                )
-                load_config.set({
-                    "separator": separator,
-                    "custom_separator": input.load_custom_sep() if hasattr(input, "load_custom_sep") else "",
-                    "header": "infer" if header == 0 else "none",
-                    "encoding": trial_encoding,
-                })
-                df_original.set(df.copy())
-                df_current.set(df.copy())
-                ops_log.set([
-                    f"Dataset cargado: {file_name or Path(file_path).name} ({df.shape[0]} filas × {df.shape[1]} cols)",
-                    f"Separador: {separator!r} | cabecera: {'inferida' if header == 0 else 'sin cabecera'} | encoding: {trial_encoding}",
-                ])
-                return df, None
-            except Exception as exc:
-                last_error = exc
+        load_config.set({
+            "separator": separator,
+            "custom_separator": input.load_custom_sep() if hasattr(input, "load_custom_sep") else "",
+            "header": "infer" if header == 0 else "none",
+            "encoding": trial_encoding,
+        })
+        df_original.set(df.copy())
+        df_current.set(df.copy())
+        ops_log.set([
+            f"Dataset cargado: {file_name or Path(file_path).name} ({df.shape[0]} filas × {df.shape[1]} cols)",
+            f"Separador: {separator!r} | cabecera: {'inferida' if header == 0 else 'sin cabecera'} | encoding: {trial_encoding}",
+        ])
+        return df, None
 
-        return None, f"No fue posible leer el archivo con separador {separator!r}. Error: {last_error}"
-
-    def html_figure(fig, height=420):
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=24, r=24, t=40, b=24),
-            height=height,
-            font=dict(family="JetBrains Mono, monospace", color="#e8eaf2"),
-        )
-        return ui.HTML(fig.to_html(full_html=False, include_plotlyjs="cdn", config={"displayModeBar": False}))
-
-    def missing_category_for_pct(pct):
-        for low, high, label, color, _ in missing_categories:
-            if low <= pct < high:
-                return label, color
-        return "Perjudicial", "var(--accent2)"
-
-    def outlier_category_for_pct(pct):
-        if pct == 0:
-            return "Sin outliers", "var(--accent)"
-        if pct < 1:
-            return "Leve", "var(--accent)"
-        if pct < 5:
-            return "Moderado", "#7c8cf8"
-        if pct < 15:
-            return "Alto", "#f59e0b"
-        return "Crítico", "var(--accent2)"
+    # Helpers moved to app_helpers.py
 
     # ── Load default CSV on startup
     @reactive.Effect
@@ -632,131 +591,18 @@ def server(input, output, session):
             load_csv_file(f[0]["datapath"], f[0]["name"])
 
     # ── Helpers
-    def get_num_cols(df):
-        return df.select_dtypes(include=np.number).columns.tolist()
-
-    def get_cat_cols(df):
-        return df.select_dtypes(include="object").columns.tolist()
+    # numeric/categorical helpers available from app_helpers
 
     def add_log(msg):
         ops_log.set(ops_log() + [msg])
 
-    def df_preview_html(df, max_rows=8):
-        num_cols = df.select_dtypes(include=np.number).columns.tolist()
-        rows = ""
-        for _, row in df.head(max_rows).iterrows():
-            cells = ""
-            for col in df.columns:
-                val = row[col]
-                if pd.isna(val):
-                    cells += f'<td class="null-cell">NaN</td>'
-                elif col in num_cols:
-                    cells += f'<td class="num-cell">{val}</td>'
-                else:
-                    cells += f'<td>{val}</td>'
-            rows += f"<tr>{cells}</tr>"
-        headers = "".join(f"<th>{c}</th>" for c in df.columns)
-        return f"""
-        <div class="df-table-wrap">
-          <table class="df-table">
-            <thead><tr>{headers}</tr></thead>
-            <tbody>{rows}</tbody>
-          </table>
-        </div>
-        <div style="color:var(--muted);font-size:11px;margin-top:6px;">
-          Mostrando {min(max_rows, len(df))} de {len(df)} filas · {df.shape[1]} columnas
-        </div>
-        """
+        # Data preview HTML now in app_helpers
 
-    def missing_report_html(df):
-        rows = []
-        for col in df.columns:
-            missing_count = int(df[col].isna().sum())
-            missing_pct = round(100 * missing_count / len(df), 2) if len(df) else 0
-            category, color = missing_category_for_pct(missing_pct / 100 if missing_pct else 0)
-            rows.append(
-                f"<tr><td>{col}</td><td>{missing_count}</td><td>{missing_pct}%</td><td><span class='pill' style='background:{color};color:#fff'>{category}</span></td></tr>"
-            )
-        legend = "".join(
-            f"<div class='legend-item'><span class='legend-swatch' style='background:{color}'></span><div><strong>{label}</strong><div style='color:var(--muted)'>{range_text}</div></div></div>"
-            for _, _, label, color, range_text in missing_categories
-        )
-        return f"""
-        <div class="df-table-wrap">
-          <table class="df-table">
-            <thead><tr><th>Columna</th><th>Nulos</th><th>%</th><th>Categoría</th></tr></thead>
-            <tbody>{''.join(rows)}</tbody>
-          </table>
-        </div>
-        <div class="legend-grid">{legend}</div>
-        """
+        # Missing report builder moved to app_helpers
 
-    def outlier_report_html(df, method="iqr", z_threshold=3.0):
-        num_cols = get_num_cols(df)
-        rows = []
-        for col in num_cols:
-            series = df[col].dropna()
-            if series.empty:
-                continue
-            if method == "zscore":
-                mean = series.mean()
-                std = series.std(ddof=0) or 1
-                outliers = ((series - mean).abs() > z_threshold * std).sum()
-                method_label = f"Z-score ±{z_threshold}σ"
-            else:
-                q1, q3 = series.quantile(0.25), series.quantile(0.75)
-                iqr = q3 - q1
-                lower = q1 - 1.5 * iqr
-                upper = q3 + 1.5 * iqr
-                outliers = ((series < lower) | (series > upper)).sum()
-                method_label = "IQR"
-            pct = round(100 * outliers / len(series), 2)
-            category, color = outlier_category_for_pct(pct)
-            rows.append(
-                f"<tr><td>{col}</td><td>{outliers}</td><td>{pct}%</td><td><span class='pill' style='background:{color};color:#fff'>{category}</span></td><td>{method_label}</td></tr>"
-            )
-        legend = """
-        <div class="legend-grid">
-          <div class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span><div><strong>Leve</strong><div style="color:var(--muted)">&lt; 1%</div></div></div>
-          <div class="legend-item"><span class="legend-swatch" style="background:#7c8cf8"></span><div><strong>Moderado</strong><div style="color:var(--muted)">[1%, 5%)</div></div></div>
-          <div class="legend-item"><span class="legend-swatch" style="background:#f59e0b"></span><div><strong>Alto</strong><div style="color:var(--muted)">[5%, 15%)</div></div></div>
-          <div class="legend-item"><span class="legend-swatch" style="background:var(--accent2)"></span><div><strong>Crítico</strong><div style="color:var(--muted)">&gt;= 15%</div></div></div>
-        </div>
-        """
-        return f"""
-        <div class="df-table-wrap">
-          <table class="df-table">
-            <thead><tr><th>Columna</th><th>Outliers</th><th>%</th><th>Categoría</th><th>Método</th></tr></thead>
-            <tbody>{''.join(rows) if rows else '<tr><td colspan="5">Sin columnas numéricas</td></tr>'}</tbody>
-          </table>
-        </div>
-        {legend}
-        """
+        # Outlier report builder moved to app_helpers
 
-    def make_corr_heatmap(df, columns, method):
-        corr = df[columns].corr(method=method)
-        fig = px.imshow(
-            corr,
-            text_auto=True,
-            color_continuous_scale=[[0, "#0d0f14"], [0.5, "#7c8cf8"], [1, "#00e5a0"]],
-            zmin=-1,
-            zmax=1,
-            aspect="auto",
-        )
-        fig.update_layout(title=f"Matriz de correlación ({method.title()})")
-        return fig
-
-    def make_distribution_figure(df, column, plot_kind):
-        series = df[column].dropna()
-        fig = go.Figure()
-        if plot_kind in {"hist", "hist_density"}:
-            fig.add_trace(go.Histogram(x=series, nbinsx=min(30, max(10, int(np.sqrt(len(series))))), name="Histograma", marker_color="#00e5a0", opacity=0.8))
-            if plot_kind == "hist_density":
-                fig.add_trace(go.Histogram(x=series, histnorm="probability density", nbinsx=min(30, max(10, int(np.sqrt(len(series))))), name="Densidad", marker_color="#7c8cf8", opacity=0.45))
-        elif plot_kind == "box":
-            fig.add_trace(go.Box(y=series, name=column, marker_color="#ff6b6b", boxmean=True))
-        fig.update_layout(title=f"{column} - {plot_kind.replace('_', ' ').title()}")
-        return fig
+    # Plot builders moved to app_helpers
 
     # ─────────────────────────────────────────────────────────────
     # OVERVIEW PAGE
@@ -771,7 +617,7 @@ def server(input, output, session):
                     ui.tags.button("Cargar archivo", type="button", onclick="openDatasetPicker('upload_csv2')", class_="btn btn-primary"),
                     ui.div(
                         ui.div(ui.input_file("upload_csv2", "", accept=[".csv", ".tsv", ".txt"]), style="display:none"),
-                        ui.div(ui.input_select("load_sep", "Separador", separator_options, selected=load_config()["separator"]), class_="ctrl-group"),
+                        ui.div(ui.input_select("load_sep", "Separador", DATA_SEPARATOR_OPTIONS, selected=load_config()["separator"]), class_="ctrl-group"),
                         ui.div(ui.input_text("load_custom_sep", "Separador personalizado", value=load_config()["custom_separator"]), class_="ctrl-group"),
                         ui.div(ui.input_select("load_header", "Cabecera", {"infer": "Con cabecera", "none": "Sin cabecera"}, selected=load_config()["header"]), class_="ctrl-group"),
                         ui.div(ui.input_text("load_encoding", "Encoding", value=load_config()["encoding"]), class_="ctrl-group"),
@@ -837,7 +683,7 @@ def server(input, output, session):
                 ui.tags.button("Cargar archivo", type="button", onclick="openDatasetPicker('upload_csv2')", class_="btn btn-primary"),
                 ui.div(
                     ui.div(ui.input_file("upload_csv2", "", accept=[".csv", ".tsv", ".txt"]), style="display:none"),
-                    ui.div(ui.input_select("load_sep", "Separador", separator_options, selected=load_config()["separator"]), class_="ctrl-group"),
+                    ui.div(ui.input_select("load_sep", "Separador", DATA_SEPARATOR_OPTIONS, selected=load_config()["separator"]), class_="ctrl-group"),
                     ui.div(ui.input_text("load_custom_sep", "Separador personalizado", value=load_config()["custom_separator"]), class_="ctrl-group"),
                     ui.div(ui.input_select("load_header", "Cabecera", {"infer": "Con cabecera", "none": "Sin cabecera"}, selected=load_config()["header"]), class_="ctrl-group"),
                     ui.div(ui.input_text("load_encoding", "Encoding", value=load_config()["encoding"]), class_="ctrl-group"),
@@ -881,7 +727,7 @@ def server(input, output, session):
             # Preview
             ui.div(
                 ui.div("PREVIEW DE DATOS", class_="card-title"),
-                ui.HTML(df_preview_html(df)),
+                ui.HTML(build_df_preview_html(df)),
                 class_="card"
             )
         )
@@ -960,8 +806,8 @@ def server(input, output, session):
         selected = [col for col in selected if col in df.columns]
         if len(selected) < 2:
             return ui.div("Selecciona al menos dos variables numéricas para ver la correlación.")
-        fig = make_corr_heatmap(df, selected, input.eda_corr_method())
-        return ui.div(ui.tags.h3("Matriz de correlación", class_="card-title"), html_figure(fig, height=520))
+        fig = build_corr_heatmap(df, selected, input.eda_corr_method())
+        return ui.div(ui.tags.h3("Matriz de correlación", class_="card-title"), render_plotly_html(fig, height=520))
 
     @output
     @render.ui
@@ -972,8 +818,8 @@ def server(input, output, session):
         column = input.eda_dist_col()
         if not column or column not in df.columns:
             return ui.div("Selecciona una variable numérica para ver su distribución.")
-        fig = make_distribution_figure(df, column, input.eda_dist_kind())
-        return ui.div(ui.tags.h3("Distribuciones iniciales", class_="card-title"), html_figure(fig, height=460))
+        fig = build_distribution_figure(df, column, input.eda_dist_kind())
+        return ui.div(ui.tags.h3("Distribuciones iniciales", class_="card-title"), render_plotly_html(fig, height=460))
 
     # ─────────────────────────────────────────────────────────────
     # DOCUMENTATION PAGE
@@ -1070,7 +916,7 @@ def server(input, output, session):
 
             ui.div(
                 ui.div("PREVIEW", class_="card-title"),
-                ui.HTML(df_preview_html(df)),
+                ui.HTML(build_df_preview_html(df)),
                 class_="card"
             )
         )
@@ -1081,7 +927,7 @@ def server(input, output, session):
         df = df_current()
         if df is None:
             return ui.div()
-        report = missing_report_html(df)
+        report = build_missing_report_html(df)
         if df.isnull().sum().sum() == 0:
             return ui.HTML('<span style="color:var(--accent)">✓ Sin valores faltantes</span>')
         return ui.HTML(report)
@@ -1177,7 +1023,7 @@ def server(input, output, session):
 
             ui.div(
                 ui.div("PREVIEW", class_="card-title"),
-                ui.HTML(df_preview_html(df)),
+                ui.HTML(build_df_preview_html(df)),
                 class_="card"
             )
         )
@@ -1279,7 +1125,7 @@ def server(input, output, session):
 
             ui.div(
                 ui.div("PREVIEW", class_="card-title"),
-                ui.HTML(df_preview_html(df)),
+                ui.HTML(build_df_preview_html(df)),
                 class_="card"
             )
         )
@@ -1479,7 +1325,7 @@ def server(input, output, session):
         for col in selected:
             fig.add_trace(go.Box(y=df[col], name=col, boxmean=True))
         fig.update_layout(title="Boxplots de variables numéricas")
-        return html_figure(fig, height=500)
+        return render_plotly_html(fig, height=500)
 
     # ─────────────────────────────────────────────────────────────
     # DROP COLUMNS PAGE
@@ -1631,27 +1477,7 @@ def server(input, output, session):
     @render.ui
     def sidebar_nav():
         page = current_page()
-
-        def nav_button(button_id, icon, label, page_name):
-            is_active = page == page_name
-            button_class = "nav-btn active" if is_active else "nav-btn"
-            return ui.input_action_button(
-                button_id,
-                ui.HTML(f'<span class="nav-icon">{icon}</span> {label}'),
-                class_=button_class,
-            )
-
-        return ui.div(
-            nav_button("nav_overview", "📊", "Overview", "overview"),
-            nav_button("nav_eda", "📈", "EDA", "eda"),
-            nav_button("nav_missing", "🔍", "Missing Values", "missing"),
-            nav_button("nav_encode", "🔢", "Encoding", "encode"),
-            nav_button("nav_scale", "⚖️", "Scaling", "scale"),
-            nav_button("nav_outlier", "🎯", "Outliers", "outlier"),
-            nav_button("nav_drop", "🗑️", "Drop Columns", "drop"),
-            nav_button("nav_export", "💾", "Export", "export"),
-            nav_button("nav_docs", "📚", "Docs", "docs"),
-        )
+        return sidebar_nav_ui(page)
 
     # ─────────────────────────────────────────────────────────────
     # SIDEBAR STATUS
