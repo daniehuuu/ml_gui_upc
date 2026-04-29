@@ -159,6 +159,10 @@ body {
   margin-bottom: 12px;
 }
 
+.card > .card-title:not(:first-child) {
+  margin-top: 20px;
+}
+
 /* ── Stats grid ── */
 .stats-grid {
   display: grid;

@@ -22,6 +22,15 @@ def render_eda(df):
     return ui.div(
         ui.div(ui.tags.h2("EDA", class_="section-title"), ui.p("Estadísticas, correlaciones y distribuciones interactivas", class_="section-sub")),
         ui.div(
+            ui.div("Estadísticas simples", class_="card-title"),
+            ui.div("Numéricas", class_="card-title"),
+            ui.output_ui("eda_numeric_stats"),  
+            # ui.div(style="margin-top: 20px;"),
+            ui.div("Categóricas", class_="card-title"),
+            ui.output_ui("eda_categorical_stats"),  
+            class_="card"
+        ),
+        ui.div(
             ui.div("CONFIGURAR ANÁLISIS", class_="card-title"),
             ui.div(
                 ui.div(ui.input_select("eda_corr_method", "Correlación", {"pearson": "Pearson", "spearman": "Spearman", "kendall": "Kendall"}), class_="ctrl-group"),
@@ -99,3 +108,98 @@ def register_eda_handlers(input, output, df_current):
             return ui.div("Selecciona una variable numérica para ver su distribución.")
         fig = build_distribution_figure(df, column, input.eda_dist_kind())
         return ui.div(ui.tags.h3("Distribuciones iniciales", class_="card-title"), render_plotly_html(fig, height=460))
+
+    @output
+    @render.ui
+    def eda_numeric_stats():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        
+        num_cols = input.eda_num_cols() or get_num_cols(df)
+        num_cols = [col for col in num_cols if col in df.columns]
+        
+        if not num_cols:
+            return ui.div("No hay variables numéricas seleccionadas.")
+        
+        # Calcular estadísticas para cada columna numérica
+        stats_list = []
+        for col in num_cols:
+            series = df[col]
+            stats_list.append({
+                'Variable': col,
+                'Media': series.mean(),
+                'Q1': series.quantile(0.25),
+                'Mediana': series.median(),
+                'Q3': series.quantile(0.75),
+                'Min': series.min(),
+                'Max': series.max(),
+                'Rango': series.max() - series.min(),
+                'IQR': series.quantile(0.75) - series.quantile(0.25),
+                'Varianza': series.var(),
+                'Desv. Est.': series.std(),
+                'Coef. Var.': (series.std() / series.mean()) if series.mean() != 0 else 0,
+                'Asimetría': series.skew(),
+                'Curtosis': series.kurtosis(),
+                'Cuenta': series.count(),
+                'Suma': series.sum(),
+            })
+        
+        # Generar tabla HTML
+        table_html = "<table class='df-table' style='width:100%;'>"
+        table_html += "<thead><tr><th>Métrica</th>" + "".join(f"<th>{col}</th>" for col in num_cols) + "</tr></thead>"
+        table_html += "<tbody>"
+        
+        # Obtener todas las métricas
+        if stats_list:
+            metric_keys = [k for k in stats_list[0].keys() if k != 'Variable']
+            for metric in metric_keys:
+                table_html += "<tr><td><strong>" + metric + "</strong></td>"
+                for row in stats_list:
+                    value = row[metric]
+                    if isinstance(value, float):
+                        value = round(value, 3)
+                    table_html += f"<td>{value}</td>"
+                table_html += "</tr>"
+        
+        table_html += "</tbody></table>"
+        
+        return ui.HTML(table_html)
+    @output
+    @render.ui
+    def eda_categorical_stats():
+        import pandas as pd
+
+        df = df_current()
+        if df is None:
+            return ui.div()
+        
+        cat_cols = input.eda_cat_cols() or get_cat_cols(df)
+        cat_cols = [col for col in cat_cols if col in df.columns]
+        
+        if not cat_cols:
+            return ui.div("No hay variables categóricas seleccionadas.")
+        
+        stats_list = []
+        total_rows = len(df)
+        
+        for col in cat_cols:
+            series = df[col]
+            value_counts = series.value_counts(dropna=False)
+            
+            top_value = value_counts.index[0] if not value_counts.empty else None
+            top_freq = value_counts.iloc[0] if not value_counts.empty else 0
+            top_pct = (top_freq / total_rows) if total_rows > 0 else 0
+            
+            stats_list.append({
+                'Variable': col,
+                'Únicos': series.nunique(dropna=True),
+                'Total': total_rows,
+                'Moda': str(top_value),
+                'Frecuencia moda': top_freq,
+                '% Moda': round(top_pct, 3),
+            })
+        
+        df_stats = pd.DataFrame(stats_list)
+        
+        return ui.HTML(df_stats.to_html(classes='df-table', border=0, index=False))
