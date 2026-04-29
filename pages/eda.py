@@ -19,8 +19,9 @@ def render_eda(df):
 
     num_cols = get_num_cols(df)
     cat_cols = get_cat_cols(df)
-    num_default = num_cols[: min(6, len(num_cols))]
-    cat_default = cat_cols[: min(6, len(cat_cols))]
+    max_recommended_col = 5
+    num_default = num_cols[: min(3, max_recommended_col)]
+    cat_default = cat_cols[: min(3, max_recommended_col)]
 
     return ui.div(
         ui.div(ui.tags.h2("EDA", class_="section-title"), ui.p("Estadísticas, correlaciones y distribuciones interactivas", class_="section-sub")),
@@ -103,8 +104,18 @@ def register_eda_handlers(input, output, df_current):
         df = df_current()
         if df is None:
             return ui.div()
-        selected = input.eda_num_cols() or get_num_cols(df)
+        selected = input.eda_num_cols()
         selected = [col for col in selected if col in df.columns]
+
+        if len(selected) > 10:
+            return ui.div(
+                ui.tags.h3("Matriz de correlación", class_="card-title"),
+                ui.p(
+                    f"Has seleccionado {len(selected)} variables. Por favor, selecciona un máximo de 10 para mantener el rendimiento y la legibilidad del gráfico.", 
+                    style="color: orange; font-weight: bold; padding: 10px;"
+                )
+            )
+        
         if len(selected) < 2:
             return ui.div("Selecciona al menos dos variables numéricas para ver la correlación.")
         fig = build_corr_heatmap(df, selected, input.eda_corr_method())
@@ -225,7 +236,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        selected = input.eda_num_cols() or get_num_cols(df)
+        selected = input.eda_num_cols()
         selected = [col for col in selected if col in df.columns]
         
         if not selected:
@@ -251,7 +262,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        selected = input.eda_cat_cols() or get_cat_cols(df)
+        selected = input.eda_cat_cols()
         selected = [col for col in selected if col in df.columns]
         
         if not selected:

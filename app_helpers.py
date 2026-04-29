@@ -216,7 +216,30 @@ def make_numeric_distribution_figure(df, column):
 def make_categorical_distribution_figure(df, column):
     """Create pie chart for categorical distribution"""
     series = df[column].dropna()
+
+    # 1. ESCUDO PARA FECHAS: Verificar si el tipo de dato es datetime
+    if pd.api.types.is_datetime64_any_dtype(series):
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Visualización omitida: Tipo de dato Fecha/Tiempo.", 
+            showarrow=False,
+            font=dict(size=14, color="gray")
+        )
+        fig.update_layout(xaxis_visible=False, yaxis_visible=False)
+        return fig
+    
     value_counts = series.value_counts()
+
+    # 2. ESCUDO DE CARDINALIDAD: Evitar colapso si hay más de 15 categorías distintas
+    if len(value_counts) > 15:
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Alta cardinalidad detectada ({len(value_counts)} valores únicos).<br>Gráfico circular omitido por rendimiento.", 
+            showarrow=False,
+            font=dict(size=14, color="orange")
+        )
+        fig.update_layout(xaxis_visible=False, yaxis_visible=False)
+        return fig
     
     if len(value_counts) < 2:
         fig = go.Figure()
@@ -236,14 +259,27 @@ def shapiro_wilk_table_html(df, columns):
     rows = []
     
     for col in columns:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+
         series = df[col].dropna()
         
         # Skip if less than 3 samples (Shapiro-Wilk requires n >= 3)
         if len(series) < 3:
             continue
-        
-        w, p_value = shapiro(series)
-        
+
+        # Límite matemático de Shapiro-Wilk (N <= 5000)
+        # La librería scipy.stats advierte que para N > 5000 el p-value pierde precisión, por eso se toma una muestra representativa.
+        if len(series) > 5000:
+            series = series.sample(n=5000, random_state=42)
+
+        # Manejo de excepciones por datos constantes
+        try:
+            w, p_value = shapiro(series)
+        except Exception:
+            # Si todos los valores son idénticos, shapiro puede fallar
+            continue
+                
         # Categorize closeness to 1
         if w >= 0.99:
             cercania = "Bastante"
