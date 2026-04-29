@@ -9,6 +9,9 @@ from app_helpers import (
     html_figure as render_plotly_html,
     get_num_cols,
     get_cat_cols,
+    make_scatter_plot_figure,
+    make_cov_heatmap,
+    outlier_report_html
 )
 
 
@@ -19,11 +22,38 @@ def render_eda(df):
 
     num_cols = get_num_cols(df)
     cat_cols = get_cat_cols(df)
-    num_default = num_cols[: min(6, len(num_cols))]
-    cat_default = cat_cols[: min(6, len(cat_cols))]
+    max_recommended_col = 5
+    num_default = num_cols[: min(3, max_recommended_col)]
+    cat_default = cat_cols[: min(3, max_recommended_col)]
 
     return ui.div(
         ui.div(ui.tags.h2("EDA", class_="section-title"), ui.p("Estadísticas, correlaciones y distribuciones interactivas", class_="section-sub")),
+        ui.div(
+            ui.div(
+                ui.div(ui.input_select("eda_dist_col", "Variable para distribución", {c: c for c in num_cols}, selected=num_default[0] if num_default else None), class_="ctrl-group"),
+                ui.div(ui.input_select("eda_dist_kind", "Vista", {"hist": "Histograma", "hist_density": "Histograma + densidad", "box": "Boxplot"}), class_="ctrl-group"),
+                class_="ctrl-row"
+            ),
+            ui.div(
+                ui.div("Reporte de Outliers", class_="card-title"),
+                ui.p("Detección de valores atípicos", class_="card-subtitle"),
+                ui.output_ui("eda_global_outliers"), 
+                ui.div("Distribuciones iniciales", class_="card-title"),
+                ui.output_ui("eda_dist_plot"),
+                class_="card plot-card"
+            ),
+            #ui.output_ui("eda_dist_plot"), class_="card plot-card",
+        ),
+        ui.div(
+            ui.div("CONFIGURAR ANÁLISIS", class_="card-title"),
+            ui.div(
+                ui.div(ui.input_select("eda_corr_method", "Correlación", {"pearson": "Pearson", "spearman": "Spearman", "kendall": "Kendall"}), class_="ctrl-group"),
+                ui.div(ui.input_selectize("eda_num_cols", "Variables numéricas", {c: c for c in num_cols}, selected=num_default, multiple=True), class_="ctrl-group"),
+                ui.div(ui.input_selectize("eda_cat_cols", "Variables categóricas", {c: c for c in cat_cols}, selected=cat_default, multiple=True), class_="ctrl-group"),
+                class_="ctrl-row"
+            ),
+            class_="card"
+        ),
         ui.div(
             ui.div("Estadísticas simples", class_="card-title"),
             ui.div("Numéricas", class_="card-title"),
@@ -42,22 +72,22 @@ def render_eda(df):
             ui.p("Prueba de normalidad para variables numéricas continuas", class_="card-subtitle"),
             ui.output_ui("eda_shapiro_results"), 
             class_="card"
-        ),
+        ),        
+        # ui.div(ui.output_ui("eda_summary"), class_="card"),
+        ui.div(ui.output_ui("eda_corr_plot"), class_="card plot-card"),
+        ui.div(ui.output_ui("eda_cov_plot"), class_="card plot-card"),
         ui.div(
-            ui.div("CONFIGURAR ANÁLISIS", class_="card-title"),
+            ui.div("Distribuciones (análisis bivariado)", class_="card-title"),
             ui.div(
-                ui.div(ui.input_select("eda_corr_method", "Correlación", {"pearson": "Pearson", "spearman": "Spearman", "kendall": "Kendall"}), class_="ctrl-group"),
-                ui.div(ui.input_selectize("eda_num_cols", "Variables numéricas", {c: c for c in num_cols}, selected=num_default, multiple=True), class_="ctrl-group"),
-                ui.div(ui.input_selectize("eda_cat_cols", "Variables categóricas", {c: c for c in cat_cols}, selected=cat_default, multiple=True), class_="ctrl-group"),
-                ui.div(ui.input_select("eda_dist_col", "Variable para distribución", {c: c for c in num_cols}, selected=num_default[0] if num_default else None), class_="ctrl-group"),
-                ui.div(ui.input_select("eda_dist_kind", "Vista", {"hist": "Histograma", "hist_density": "Histograma + densidad", "box": "Boxplot"}), class_="ctrl-group"),
+                ui.div(ui.input_select("eda_bivar_x", "Variable X", {c: c for c in num_cols}, selected=num_cols[0] if len(num_cols) > 0 else None), class_="ctrl-group"),                
+                ui.div(ui.input_select("eda_bivar_y", "Variable Y", {c: c for c in num_cols}, selected=num_cols[1] if len(num_cols) > 1 else num_cols[0] if num_cols else None), class_="ctrl-group"),        
+                ui.div(ui.input_select("eda_bivar_color", "Agrupar por ", {"": "Ninguno"} | {c: c for c in cat_cols}, selected=""), class_="ctrl-group"),        
                 class_="ctrl-row"
             ),
+            ui.div("Gráfico de correlación", class_="card-title"),
+            ui.output_ui("eda_correlation_distribution"),
             class_="card"
-        ),
-        # ui.div(ui.output_ui("eda_summary"), class_="card"),
-        ui.div(ui.output_ui("eda_corr_plot"), class_="card plot-card")
-        # ui.div(ui.output_ui("eda_dist_plot"), class_="card plot-card")
+        )
     )
 
 
@@ -103,12 +133,37 @@ def register_eda_handlers(input, output, df_current):
         df = df_current()
         if df is None:
             return ui.div()
-        selected = input.eda_num_cols() or get_num_cols(df)
+        selected = input.eda_num_cols()
         selected = [col for col in selected if col in df.columns]
+
+        if len(selected) > 10:
+            return ui.div(
+                ui.tags.h3("Matriz de correlación", class_="card-title"),
+                ui.p(
+                    f"Has seleccionado {len(selected)} variables. Por favor, selecciona un máximo de 10 para mantener el rendimiento y la legibilidad del gráfico.", 
+                    style="color: orange; font-weight: bold; padding: 10px;"
+                )
+            )
+        
         if len(selected) < 2:
             return ui.div("Selecciona al menos dos variables numéricas para ver la correlación.")
         fig = build_corr_heatmap(df, selected, input.eda_corr_method())
-        return ui.div(ui.tags.h3("Matriz de correlación", class_="card-title"), render_plotly_html(fig, height=520))
+
+        legend_corr = """
+        <div style="margin-top: 16px; color: var(--muted); font-size: 12px; line-height: 1.6;">
+          <strong>Leyenda de Correlación (Estandarizada):</strong><br>
+          <strong>Rango:</strong> De -1 a 1. Mide la <em>fuerza</em> y <em>dirección</em> de la relación lineal.<br>
+          <strong>Cercano a 1:</strong> Relación positiva fuerte (si una variable sube, la otra también).<br>
+          <strong>Cercano a -1:</strong> Relación negativa fuerte (si una variable sube, la otra baja).<br>
+          <strong>Cercano a 0:</strong> Ausencia de relación lineal (no tienen impacto directo entre sí).
+        </div>
+        """
+
+        return ui.div(
+            ui.tags.h3("Matriz de correlación", class_="card-title"), 
+            render_plotly_html(fig, height=520),
+            ui.HTML(legend_corr) # Añadimos la leyenda al final del contenedor
+        )
 
     @output
     @render.ui
@@ -120,7 +175,7 @@ def register_eda_handlers(input, output, df_current):
         if not column or column not in df.columns:
             return ui.div("Selecciona una variable numérica para ver su distribución.")
         fig = build_distribution_figure(df, column, input.eda_dist_kind())
-        return ui.div(ui.tags.h3("Distribuciones iniciales", class_="card-title"), render_plotly_html(fig, height=460))
+        return ui.div(ui.tags.h3(input.eda_dist_kind(), class_="card-title"), render_plotly_html(fig, height=460))
 
     @output
     @render.ui
@@ -225,7 +280,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        selected = input.eda_num_cols() or get_num_cols(df)
+        selected = input.eda_num_cols()
         selected = [col for col in selected if col in df.columns]
         
         if not selected:
@@ -251,7 +306,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        selected = input.eda_cat_cols() or get_cat_cols(df)
+        selected = input.eda_cat_cols()
         selected = [col for col in selected if col in df.columns]
         
         if not selected:
@@ -284,3 +339,73 @@ def register_eda_handlers(input, output, df_current):
             return ui.div("Selecciona al menos una variable numérica para ver el test de Shapiro-Wilk.")
         
         return ui.HTML(shapiro_wilk_table_html(df, selected))
+    
+    @output
+    @render.ui
+    def eda_correlation_distribution():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        
+        col_x = input.eda_bivar_x()
+        col_y = input.eda_bivar_y()
+        col_color = input.eda_bivar_color()
+        if not col_color: 
+            col_color = None
+        
+        if not col_x or not col_y or col_x not in df.columns or col_y not in df.columns:
+            return ui.div("Selecciona las variables X e Y.")
+            
+        fig = make_scatter_plot_figure(df, col_x, col_y, col_color)
+        return render_plotly_html(fig, height=450)
+    
+    @output
+    @render.ui
+    def eda_cov_plot():
+        df = df_current()
+        if df is None:
+            return ui.div()
+            
+        selected = input.eda_num_cols()
+        selected = [col for col in selected if col in df.columns]
+
+        if len(selected) > 10:
+            return ui.div(
+                ui.tags.h3("Matriz de covarianza", class_="card-title"),
+                ui.p(
+                    f"Seleccionaste {len(selected)} variables. El límite es 10 para asegurar precisión visual.", 
+                    style="color: orange; font-weight: bold; padding: 10px;"
+                )
+            )
+        
+        if len(selected) < 2:
+            return ui.div("Selecciona al menos dos variables numéricas en la configuración.")
+            
+        fig = make_cov_heatmap(df, selected)
+        
+        legend_cov = """
+        <div style="margin-top: 16px; color: var(--muted); font-size: 12px; line-height: 1.6;">
+          <strong>Leyenda de Covarianza (No Estandarizada):</strong><br>
+          <strong>Magnitud:</strong> Depende de las unidades originales de los datos (no está limitada a -1 y 1). Mide la <em>dirección</em> conjunta.<br>
+          <strong>Positiva (> 0):</strong> Las variables tienden a moverse en la misma dirección.<br>
+          <strong>Negativa (< 0):</strong> Las variables tienden a moverse en direcciones opuestas.<br>
+          <strong>Importante:</strong> Un número grande no significa necesariamente una relación "más fuerte" que un número pequeño, solo refleja la escala de los datos.
+        </div>
+        """
+        
+        return ui.div(
+            ui.tags.h3("Matriz de covarianza", class_="card-title"), 
+            render_plotly_html(fig, height=520),
+            ui.HTML(legend_cov) # Añadimos la leyenda al final del contenedor
+        )
+    
+    @output
+    @render.ui
+    def eda_global_outliers():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        column = input.eda_dist_col()
+        html_report = outlier_report_html(df[[column]], method="iqr")
+        
+        return ui.HTML(html_report)

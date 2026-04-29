@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import shapiro
 from shiny import ui
+from scipy.stats import gaussian_kde
 
 separator_options = {
     ",": "Coma ( , )",
@@ -177,8 +178,8 @@ def make_corr_heatmap(df, columns, method):
     corr = df[columns].corr(method=method)
     fig = px.imshow(
         corr,
-        text_auto=True,
-        color_continuous_scale=[[0, "#0d0f14"], [0.5, "#7c8cf8"], [1, "#00e5a0"]],
+        text_auto='.4f',
+        color_continuous_scale=[[0, "#EAE3F1"], [0.5, "#9966CC"], [1, "#66CC99"]],
         zmin=-1,
         zmax=1,
         aspect="auto",
@@ -186,16 +187,56 @@ def make_corr_heatmap(df, columns, method):
     fig.update_layout(title=f"Matriz de correlación ({method.title()})")
     return fig
 
+def make_cov_heatmap(df, columns):
+    """Genera un mapa de calor para la matriz de covarianza"""
+    # Cálculo de la matriz de covarianza
+    cov = df[columns].cov()
+    
+    fig = px.imshow(
+        cov,
+        text_auto='.4f',
+        color_continuous_scale=[[0, "#FBEEE6"], [0.5, "#E69D6C"], [1, "#B37D59"]], 
+        aspect="auto",
+    )
+    
+    fig.update_layout(
+        title="Matriz de Covarianza",
+        # Ajuste de márgenes para que los nombres de variables largos no se corten
+        margin=dict(l=50, r=50, t=50, b=50)
+    )
+    return fig
 
 def make_distribution_figure(df, column, plot_kind):
     series = df[column].dropna()
     fig = go.Figure()
+
     if plot_kind in {"hist", "hist_density"}:
-        fig.add_trace(go.Histogram(x=series, nbinsx=min(30, max(10, int(np.sqrt(len(series))))), name="Histograma", marker_color="#00e5a0", opacity=0.8))
+        histnorm_val = "probability density" if plot_kind == "hist_density" else None
+        fig.add_trace(go.Histogram(
+            x=series, 
+            histnorm=histnorm_val,
+            nbinsx=min(30, max(10, int(np.sqrt(len(series))))), 
+            name="Histograma", 
+            marker_color="#00e5a0", 
+            opacity=0.8
+        ))
         if plot_kind == "hist_density":
-            fig.add_trace(go.Histogram(x=series, histnorm="probability density", nbinsx=min(30, max(10, int(np.sqrt(len(series))))), name="Densidad", marker_color="#7c8cf8", opacity=0.45))
+            try:
+                kde = gaussian_kde(series)
+                x_vals = np.linspace(series.min(), series.max(), 200)
+                y_vals = kde(x_vals)
+                
+                fig.add_trace(go.Scatter(
+                    x=x_vals, 
+                    y=y_vals, 
+                    mode='lines', 
+                    name="Densidad KDE", 
+                    line=dict(color="#7c8cf8", width=3)
+                ))
+            except Exception:
+                pass
     elif plot_kind == "box":
-        fig.add_trace(go.Box(y=series, name=column, marker_color="#ff6b6b", boxmean=True))
+        fig.add_trace(go.Box(x=series, name=column, marker_color="#ff6b6b", boxmean=True, orientation="h", boxpoints='outliers', jitter=0.3))
     fig.update_layout(title=f"{column} - {plot_kind.replace('_', ' ').title()}")
     return fig
 
@@ -216,7 +257,30 @@ def make_numeric_distribution_figure(df, column):
 def make_categorical_distribution_figure(df, column):
     """Create pie chart for categorical distribution"""
     series = df[column].dropna()
+
+    # 1. ESCUDO PARA FECHAS: Verificar si el tipo de dato es datetime
+    if pd.api.types.is_datetime64_any_dtype(series):
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Visualización omitida: Tipo de dato Fecha/Tiempo.", 
+            showarrow=False,
+            font=dict(size=14, color="gray")
+        )
+        fig.update_layout(xaxis_visible=False, yaxis_visible=False)
+        return fig
+    
     value_counts = series.value_counts()
+
+    # 2. ESCUDO DE CARDINALIDAD: Evitar colapso si hay más de 15 categorías distintas
+    if len(value_counts) > 15:
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Alta cardinalidad detectada ({len(value_counts)} valores únicos).<br>Gráfico circular omitido por rendimiento.", 
+            showarrow=False,
+            font=dict(size=14, color="orange")
+        )
+        fig.update_layout(xaxis_visible=False, yaxis_visible=False)
+        return fig
     
     if len(value_counts) < 2:
         fig = go.Figure()
@@ -236,14 +300,27 @@ def shapiro_wilk_table_html(df, columns):
     rows = []
     
     for col in columns:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+
         series = df[col].dropna()
         
         # Skip if less than 3 samples (Shapiro-Wilk requires n >= 3)
         if len(series) < 3:
             continue
-        
-        w, p_value = shapiro(series)
-        
+
+        # Límite matemático de Shapiro-Wilk (N <= 5000)
+        # La librería scipy.stats advierte que para N > 5000 el p-value pierde precisión, por eso se toma una muestra representativa.
+        if len(series) > 5000:
+            series = series.sample(n=5000, random_state=42)
+
+        # Manejo de excepciones por datos constantes
+        try:
+            w, p_value = shapiro(series)
+        except Exception:
+            # Si todos los valores son idénticos, shapiro puede fallar
+            continue
+                
         # Categorize closeness to 1
         if w >= 0.99:
             cercania = "Bastante"
@@ -277,3 +354,33 @@ def shapiro_wilk_table_html(df, columns):
     </div>
     {legend}
     """
+
+def make_scatter_plot_figure(df, col_x, col_y, col_color=None):
+    """Create a scatter plot for bivariate analysis"""
+    # Eliminar nulos solo de estas dos columnas para no graficar vacíos
+    subset_cols = [col_x, col_y]
+    if col_color:
+        subset_cols.append(col_color)
+        
+    plot_df = df.dropna(subset=subset_cols)
+    #plot_df = df.dropna(subset=[col_x, col_y])
+    
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="No hay datos válidos para cruzar estas variables", showarrow=False)
+        fig.update_layout(xaxis_visible=False, yaxis_visible=False)
+        return fig
+
+    # opacity=0.5 ayuda a ver la densidad cuando hay cientos de puntos solapados
+    fig = px.scatter(
+        plot_df, 
+        x=col_x, 
+        y=col_y,
+        color=col_color,
+        title=f"Dispersión: {col_x} vs {col_y}",
+        opacity=0.6,
+        marginal_x="histogram",
+        marginal_y="histogram",
+        color_discrete_sequence=["#7c8cf8"] if not col_color else px.colors.qualitative.Pastel 
+    )
+    return fig
