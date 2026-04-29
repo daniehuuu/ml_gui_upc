@@ -155,6 +155,17 @@ def server(input, output, session):
         if target_dtype == "object":
             return series.astype("object"), None
 
+        if target_dtype == "datetime64[ns]":
+            try:
+                converted = pd.to_datetime(series, errors="coerce")
+                n_failed = series.notna().sum() - converted.notna().sum()
+                if n_failed > 0:
+                    sample_values = ", ".join(series[series.notna() & converted.isna()].astype(str).unique()[:3])
+                    return None, f"No se pudieron convertir {n_failed} valores a datetime. Ejemplos: {sample_values}"
+                return converted, None
+            except Exception as e:
+                return None, f"Error al convertir a datetime: {str(e)}"
+
         numeric = _to_numeric_flexible(series)
         invalid_mask = series.notna() & numeric.isna()
         if invalid_mask.any():
@@ -341,7 +352,7 @@ def server(input, output, session):
                     f"<button type='button' class='dtype-opt-btn{' active' if dtype_ui == opt else ''}' "
                     f"onclick=\"Shiny.setInputValue('dtype_change', {{token: '{col_token}', dtype: '{opt}', nonce: Date.now()}}, {{priority: 'event'}}); return false;\">{opt}</button>"
                 )
-                for opt in ["int64", "float64", "object"]
+                for opt in ["int64", "float64", "object", "datetime64[ns]"]
             )
 
             dtype_rows += f"""
@@ -667,7 +678,7 @@ def server(input, output, session):
 
         token = payload.get("token")
         target_dtype = payload.get("dtype")
-        if not token or target_dtype not in {"int64", "float64", "object"}:
+        if not token or target_dtype not in {"int64", "float64", "object", "datetime64[ns]"}:
             return
 
         df = df_current()
@@ -681,6 +692,9 @@ def server(input, output, session):
         if err:
             add_log(f"Cambio de dtype cancelado en '{col}' -> {target_dtype}: {err}")
             push_toast(f"No se pudo convertir {col} a {target_dtype}: {err}", "error")
+            return
+
+        if converted is None:
             return
 
         current_dtype = str(df[col].dtype)
