@@ -159,6 +159,10 @@ body {
   margin-bottom: 12px;
 }
 
+.card-subtitle {
+  color: var(--muted);
+}
+
 .card > .card-title:not(:first-child) {
   margin-top: 20px;
 }

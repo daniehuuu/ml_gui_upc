@@ -3,6 +3,9 @@ from shiny import ui, render
 from app_helpers import (
     make_corr_heatmap as build_corr_heatmap,
     make_distribution_figure as build_distribution_figure,
+    make_numeric_distribution_figure,
+    make_categorical_distribution_figure,
+    shapiro_wilk_table_html,
     html_figure as render_plotly_html,
     get_num_cols,
     get_cat_cols,
@@ -25,9 +28,19 @@ def render_eda(df):
             ui.div("Estadísticas simples", class_="card-title"),
             ui.div("Numéricas", class_="card-title"),
             ui.output_ui("eda_numeric_stats"),  
-            # ui.div(style="margin-top: 20px;"),
             ui.div("Categóricas", class_="card-title"),
             ui.output_ui("eda_categorical_stats"),  
+            class_="card"
+        ),
+        ui.div(
+            ui.div("Distribuciones (análisis univariado)", class_="card-title"),
+            ui.div("Numéricas", class_="card-title"),
+            ui.output_ui("eda_numeric_distribution"),  
+            ui.div("Categóricas", class_="card-title"),
+            ui.output_ui("eda_categorical_distribution"),  
+            ui.div("Test de Shapiro-Wilk", class_="card-title"),
+            ui.p("Prueba de normalidad para variables numéricas continuas", class_="card-subtitle"),
+            ui.output_ui("eda_shapiro_results"), 
             class_="card"
         ),
         ui.div(
@@ -42,9 +55,9 @@ def render_eda(df):
             ),
             class_="card"
         ),
-        ui.div(ui.output_ui("eda_summary"), class_="card"),
-        ui.div(ui.output_ui("eda_corr_plot"), class_="card plot-card"),
-        ui.div(ui.output_ui("eda_dist_plot"), class_="card plot-card")
+        # ui.div(ui.output_ui("eda_summary"), class_="card"),
+        ui.div(ui.output_ui("eda_corr_plot"), class_="card plot-card")
+        # ui.div(ui.output_ui("eda_dist_plot"), class_="card plot-card")
     )
 
 
@@ -165,6 +178,7 @@ def register_eda_handlers(input, output, df_current):
         table_html += "</tbody></table>"
         
         return ui.HTML(table_html)
+    
     @output
     @render.ui
     def eda_categorical_stats():
@@ -203,3 +217,70 @@ def register_eda_handlers(input, output, df_current):
         df_stats = pd.DataFrame(stats_list)
         
         return ui.HTML(df_stats.to_html(classes='df-table', border=0, index=False))
+    
+    @output
+    @render.ui
+    def eda_numeric_distribution():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        
+        selected = input.eda_num_cols() or get_num_cols(df)
+        selected = [col for col in selected if col in df.columns]
+        
+        if not selected:
+            return ui.div("Selecciona al menos una variable numérica para ver la distribución.")
+        
+        cards = []
+        for col in selected:
+            fig = make_numeric_distribution_figure(df, col)
+            cards.append(
+                ui.div(
+                    ui.div(col, class_="card-title"),
+                    render_plotly_html(fig, height=450),
+                    class_="sub-card"
+                )
+            )
+        
+        return ui.div(*cards, class_="cards-grid")
+
+    @output
+    @render.ui
+    def eda_categorical_distribution():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        
+        selected = input.eda_cat_cols() or get_cat_cols(df)
+        selected = [col for col in selected if col in df.columns]
+        
+        if not selected:
+            return ui.div("Selecciona al menos una variable categórica para ver la distribución.")
+        
+        cards = []
+        for col in selected:
+            fig = make_categorical_distribution_figure(df, col)
+            cards.append(
+                ui.div(
+                    ui.div(col, class_="card-title"),
+                    render_plotly_html(fig, height=450),
+                    class_="sub-card"
+                )
+            )
+        
+        return ui.div(*cards, class_="cards-grid")
+
+    @output
+    @render.ui
+    def eda_shapiro_results():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        
+        selected = input.eda_num_cols() or get_num_cols(df)
+        selected = [col for col in selected if col in df.columns]
+        
+        if not selected:
+            return ui.div("Selecciona al menos una variable numérica para ver el test de Shapiro-Wilk.")
+        
+        return ui.HTML(shapiro_wilk_table_html(df, selected))

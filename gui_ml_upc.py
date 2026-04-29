@@ -37,6 +37,7 @@ from pages import (
 app_ui = ui.page_fluid(
     ui.tags.style(APP_CUSTOM_CSS),
     ui.tags.link(rel="stylesheet", href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"),
+    ui.tags.script(src="https://cdn.plot.ly/plotly-2.32.0.min.js"),
 
     # ── Header
     ui.div(

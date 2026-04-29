@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from scipy.stats import shapiro
 from shiny import ui
 
 separator_options = {
@@ -47,7 +48,7 @@ def html_figure(fig, height=420):
         height=height,
         font=dict(family="JetBrains Mono, monospace", color="#e8eaf2"),
     )
-    return ui.HTML(fig.to_html(full_html=False, include_plotlyjs="cdn", config={"displayModeBar": False}))
+    return ui.HTML(fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False}))
 
 
 def missing_category_for_pct(pct):
@@ -197,3 +198,82 @@ def make_distribution_figure(df, column, plot_kind):
         fig.add_trace(go.Box(y=series, name=column, marker_color="#ff6b6b", boxmean=True))
     fig.update_layout(title=f"{column} - {plot_kind.replace('_', ' ').title()}")
     return fig
+
+def make_numeric_distribution_figure(df, column):
+    """Create histogram with boxplot marginal for numeric distribution"""
+    series = df[column].dropna()
+    fig = px.histogram(
+        df,
+        x=column,
+        nbins=50,
+        title=f"{column} - Distribución",
+        opacity=0.75,
+        marginal='box'
+    )
+    return fig
+
+
+def make_categorical_distribution_figure(df, column):
+    """Create pie chart for categorical distribution"""
+    series = df[column].dropna()
+    value_counts = series.value_counts()
+    
+    if len(value_counts) < 2:
+        fig = go.Figure()
+        fig.add_annotation(text="Se requieren al menos 2 valores únicos", showarrow=False)
+        return fig
+    
+    fig = px.pie(
+        values=value_counts.values,
+        names=value_counts.index,
+        title=f"{column} - Distribución"
+    )
+    return fig
+
+
+def shapiro_wilk_table_html(df, columns):
+    """Generate HTML table with Shapiro-Wilk normality test results"""
+    rows = []
+    
+    for col in columns:
+        series = df[col].dropna()
+        
+        # Skip if less than 3 samples (Shapiro-Wilk requires n >= 3)
+        if len(series) < 3:
+            continue
+        
+        w, p_value = shapiro(series)
+        
+        # Categorize closeness to 1
+        if w >= 0.99:
+            cercania = "Bastante"
+        elif w >= 0.95:
+            cercania = "Mucha"
+        elif w >= 0.90:
+            cercania = "Parecida"
+        else:
+            cercania = "No normal"
+        
+        # Categorize normality
+        normal = "Sí" if p_value > 0.05 else "No"
+        
+        rows.append(f"<tr><td>{escape(str(col))}</td><td>{w:.4f}</td><td>{cercania}</td><td>{p_value:.4f}</td><td>{normal}</td></tr>")
+    
+    legend = """
+    <div style="margin-top: 16px; color: var(--muted); font-size: 12px; line-height: 1.6;">
+      <strong>Leyenda:</strong><br>
+      <strong>W:</strong> Estadístico de Shapiro-Wilk (rango 0-1, cercano a 1 indica normalidad)<br>
+      <strong>Cercania(W):</strong> Bastante (≥0.99) | Mucha (≥0.95) | Parecida (≥0.90) | No normal (<0.90)<br>
+      <strong>P-value:</strong> Resultado del test. Si p > 0.05 → distribución normal, p ≤ 0.05 → no normal
+    </div>
+    """
+    
+    return f"""
+    <div class="df-table-wrap">
+      <table class="df-table">
+        <thead><tr><th>var</th><th>w</th><th>cercania(w)</th><th>p-value</th><th>Normal (p-value)</th></tr></thead>
+        <tbody>{''.join(rows) if rows else '<tr><td colspan="5">Sin columnas numéricas con suficientes datos</td></tr>'}</tbody>
+      </table>
+    </div>
+    {legend}
+    """
