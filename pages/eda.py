@@ -241,8 +241,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        cat_cols = input.eda_cat_cols() or get_cat_cols(df)
-        cat_cols = [col for col in cat_cols if col in df.columns]
+        cat_cols = get_cat_cols(df)
         
         if not cat_cols:
             return ui.div("No hay variables categóricas seleccionadas.")
@@ -304,9 +303,8 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        selected = input.eda_cat_cols()
-        selected = [col for col in selected if col in df.columns]
-        
+        selected = get_cat_cols(df)
+
         if not selected:
             return ui.div("Selecciona al menos una variable categórica para ver la distribución.")
         
