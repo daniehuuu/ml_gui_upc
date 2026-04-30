@@ -326,9 +326,13 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
+        selected = get_num_cols(df)
+        
+        """
         selected = input.eda_num_cols() or get_num_cols(df)
         selected = [col for col in selected if col in df.columns]
-        
+        """
+
         if not selected:
             return ui.div("Selecciona al menos una variable numérica para ver el test de Shapiro-Wilk.")
         
