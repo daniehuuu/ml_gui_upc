@@ -182,8 +182,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        num_cols = input.eda_num_cols() or get_num_cols(df)
-        num_cols = [col for col in num_cols if col in df.columns]
+        num_cols = get_num_cols(df)
         
         if not num_cols:
             return ui.div("No hay variables numéricas seleccionadas.")
@@ -277,8 +276,7 @@ def register_eda_handlers(input, output, df_current):
         if df is None:
             return ui.div()
         
-        selected = input.eda_num_cols()
-        selected = [col for col in selected if col in df.columns]
+        selected = get_num_cols(df)
         
         if not selected:
             return ui.div("Selecciona al menos una variable numérica para ver la distribución.")
