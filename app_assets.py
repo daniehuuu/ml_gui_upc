@@ -167,6 +167,42 @@ body {
   margin-top: 20px;
 }
 
+.cards-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+}
+
+.cards-grid > .sub-card {
+  min-width: 0;
+}
+
+@media (min-width: 760px) {
+  .cards-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1180px) {
+  .cards-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.sub-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+}
+
+.sub-card .js-plotly-plot,
+.sub-card .plotly,
+.sub-card .plotly-graph-div {
+  width: 100% !important;
+}
+
 /* ── Stats grid ── */
 .stats-grid {
   display: grid;
