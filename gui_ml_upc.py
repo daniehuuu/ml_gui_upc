@@ -91,6 +91,7 @@ def server(input, output, session):
     current_page = reactive.Value("overview")
     df_original = reactive.Value(None)
     df_current = reactive.Value(None)
+    encoding_state = reactive.Value({})
     ops_log = reactive.Value([])
     dtype_manual_state = reactive.Value({})
     toast_state = reactive.Value(None)
@@ -362,11 +363,11 @@ def server(input, output, session):
     # ── Register page handlers
     register_eda_handlers(input, output, df_current)
     register_missing_handlers(input, output, session, df_current, current_page, add_log)
-    register_encode_handlers(input, output, df_current, add_log)
+    register_encode_handlers(input, output, df_current, add_log, encoding_state)
     register_scale_handlers(input, output, df_current, add_log)
     register_outlier_handlers(input, output, df_current, add_log)
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
-    register_model_handlers(input, output, df_current, add_log)
+    register_model_handlers(input, output, df_current, add_log, encoding_state)
     register_export_handlers(input, output, df_current)
 
     # ─────────────────────────────────────────────────────────────

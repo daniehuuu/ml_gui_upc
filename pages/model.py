@@ -5,6 +5,7 @@ from app_helpers import get_num_cols
 import time
 import pandas as pd
 import plotly.graph_objects as go
+import random
 
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
@@ -68,11 +69,20 @@ def render_model(df):
             ui.div("RESULTADOS DEL MODELO", class_="card-title"),
             ui.output_ui("model_results"),
             class_="card"
+        ),
+
+        ui.div(
+            ui.div("SIMULADOR EN VIVO (TEST SET)", class_="card-title"),
+            ui.p("Toma un paciente aleatorio del conjunto de prueba (datos no vistos por el modelo) para validar su capacidad predictiva.", style="color: var(--muted);"),
+            ui.input_action_button("btn_random_predict", "Predicción Aleatoria", class_="btn btn-primary"),
+            ui.tags.br(), ui.tags.br(),
+            ui.output_ui("random_prediction_ui"),
+            class_="card"
         )
     )
 
 
-def register_model_handlers(input, output, df_current, add_log):
+def register_model_handlers(input, output, df_current, add_log, encoding_state):
     model_state = reactive.Value(None)
 
     @reactive.Effect
@@ -255,7 +265,11 @@ def register_model_handlers(input, output, df_current, add_log):
                     "report_dict": report_dict,
                     "cm_html": cm_html,
                     "importance_df": importance_df,
-                    "elapsed": elapsed
+                    "elapsed": elapsed,
+                    "best_model": best_model,
+                    "X_test": X_test,
+                    "y_test": y_test,
+                    "class_names": class_names,
                 })
 
                 p.set(100, message="✅ Modelo entrenado 100%", detail=f"Resultados listos | Tiempo total: {elapsed}s")
@@ -363,3 +377,143 @@ def register_model_handlers(input, output, df_current, add_log):
                 </table>
             """)
         )
+    
+    prediction_state = reactive.Value(None)
+
+    # 2. Lógica al presionar el botón "Predicción Aleatoria"
+    @reactive.Effect
+    @reactive.event(input.btn_random_predict)
+    def _do_random_predict():
+        state = model_state()
+        if state is None or "best_model" not in state:
+            ui.notification_show("Primero debes entrenar el modelo.", type="warning")
+            return
+        
+        X_test = state["X_test"]
+        y_test = state["y_test"]
+        best_model = state["best_model"]
+        target_col = input.target_col()
+
+        # Seleccionar un paciente aleatorio
+        random_idx = random.randint(0, len(X_test) - 1)
+        
+        # Extraer la fila de datos (X)
+        sample_X = X_test.iloc[[random_idx]]
+        
+        # Extraer el valor real (y). Manejo seguro por si y_test es Serie o Array
+        true_y_encoded = y_test.iloc[random_idx] if isinstance(y_test, pd.Series) else y_test[random_idx]
+        
+        # Hacer la predicción con el modelo
+        pred_encoded = best_model.predict(sample_X)[0]
+        probs = best_model.predict_proba(sample_X)[0]
+
+        encodings = encoding_state()
+
+        true_label_text = decode_value(int(true_y_encoded), target_col, encodings)
+        pred_label_text = decode_value(int(pred_encoded), target_col, encodings)
+        
+        prediction_state.set({
+            "features_dict": sample_X.iloc[0].round(4).to_dict(),
+            "true_label": true_label_text,
+            "pred_label": pred_label_text,
+            "confidence": round(max(probs) * 100, 2)
+        })
+
+
+    @output
+    @render.ui
+    def random_prediction_ui():
+        p_state = prediction_state()
+        if p_state is None:
+            return ui.div()
+            
+        true_label = p_state["true_label"]
+        pred_label = p_state["pred_label"]
+        
+        # Lógica exacta basada en las clases manuales
+        pred_str = str(pred_label).strip().lower()
+
+        # Lógica dinámica: Busca las palabras clave sin importar el número interno
+        if pred_label == "1" or "low" in pred_str:
+            bg_color = "#f0fdf4" 
+            border_color = "#22c55e" 
+            status_icon = f"✅ BAJO RIESGO ({pred_label})"
+            accion_clinica = "Paciente pediátrico fuera de peligro inmediato. Mantener controles de rutina y nutrición en las instalaciones de ALDIMI."
+            
+        elif pred_label == "2" or "medium" in pred_str:
+            bg_color = "#fffbeb" 
+            border_color = "#f59e0b" 
+            status_icon = f"⚠️ RIESGO MODERADO ({pred_label})"
+            accion_clinica = "El paciente requiere entrar en observación preventiva. Programar una consulta con endocrinología pediátrica en el corto plazo."
+            
+        elif pred_label == "0" or "high" in pred_str:
+            bg_color = "#fef2f2" 
+            border_color = "#ef4444" 
+            status_icon = f"🚨 ALERTA CRÍTICA: ALTO RIESGO ({pred_label})"
+            accion_clinica = "Derivación hospitalaria urgente. Iniciar protocolo de traslado a centro oncológico pediátrico para atención prioritaria."
+
+        else:
+            # Fallback dinámico para CUALQUIER otro dataset que entrenen
+            bg_color = "#f3f4f6"
+            border_color = "#9ca3af"
+            status_icon = f"ℹ️ CLASIFICACIÓN: {pred_label.upper()}"
+            accion_clinica = "Resultado de clasificación genérica. Aplicar protocolo estándar según la clase obtenida."
+
+        # Identificador visual si el modelo acertó o se equivocó (True Positive vs False Positive/Negative)
+        match_icon = "🎯 ACIERTO DEL MODELO" if true_label == pred_label else "❌ FALLO DE PREDICCIÓN"
+        match_color = "#16a34a" if true_label == pred_label else "#dc2626"
+
+        # Crear la lista de variables para mostrar qué evaluó el modelo
+        features_html = "".join(
+            f"<li><b>{k}</b>: {v}</li>" for k, v in p_state["features_dict"].items()
+        )
+
+        return ui.HTML(f"""
+            <div style="display: flex; gap: 20px;">
+                <div style="flex: 1; padding: 15px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                    <h4 style="margin-top: 0; color: var(--muted); display: flex; justify-content: space-between;">
+                        <span>Biomarcadores Evaluados</span>
+                        <span style="color: {match_color}; font-size: 0.8em; border: 1px solid {match_color}; padding: 2px 6px; border-radius: 4px;">
+                            {match_icon} (Real: {true_label})
+                        </span>
+                    </h4>
+                    <ul style="font-size: 0.9em; column-count: 2; list-style-type: none; padding-left: 0;">
+                        {features_html}
+                    </ul>
+                </div>
+                
+                <div style="flex: 1; padding: 15px; background: {bg_color}; border-radius: 8px; border-left: 6px solid {border_color};">
+                    <h4 style="margin-top: 0; color: {border_color}; font-size: 1.2em;">{status_icon}</h4>
+                    <p style="margin-bottom: 8px;">
+                        <strong>Confianza del Algoritmo:</strong> <span style="font-size: 1.1em;">{p_state['confidence']}%</span>
+                    </p>
+                    <hr style="border-top: 1px solid {border_color}; opacity: 0.3; margin: 10px 0;">
+                    <p style="margin-bottom: 0; font-size: 1.05em; line-height: 1.4;">
+                        <strong>Protocolo ALDIMI:</strong><br>
+                        {accion_clinica}
+                    </p>
+                </div>
+            </div>
+        """)
+    
+def decode_value(encoded_val, col_name, encodings):
+
+    if col_name not in encodings:
+        return str(encoded_val)  # fallback
+    
+    mapping = encodings[col_name]
+    
+    # Caso Label/Binary
+    if isinstance(mapping, dict):
+        inv_map = {v: k for k, v in mapping.items()}
+        return inv_map.get(encoded_val, str(encoded_val))
+    
+    # Caso One-Hot (lista de columnas dummy)
+    elif isinstance(mapping, list):
+        # reconstruir categoría original
+        for dummy_col in mapping:
+            if encoded_val.get(dummy_col, 0) == 1:
+                return dummy_col.replace("_encoded", "").replace(f"{col_name}_", "")
+        return str(encoded_val)
+    
+    return str(encoded_val)
