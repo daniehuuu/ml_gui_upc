@@ -45,7 +45,13 @@ def render_scale(df):
 
         ui.div(
             ui.div("ESTADÍSTICAS ACTUALES", class_="card-title"),
-            ui.output_ui("scale_stats"),
+            ui.output_ui("scale_stats_original"),
+            class_="card"
+        ),
+
+        ui.div(
+            ui.div("ESTADÍSTICAS ESCALADAS", class_="card-title"),
+            ui.output_ui("scale_stats_scaled"),
             class_="card"
         ),
 
@@ -59,32 +65,57 @@ def render_scale(df):
 
 def register_scale_handlers(input, output, df_current, add_log):
     """Register scaling page handlers"""
-    
-    @output
-    @render.ui
-    def scale_stats():
-        df = df_current()
-        if df is None:
-            return ui.div()
-        num_cols = get_num_cols(df)
-        desc = df[num_cols].describe().round(3)
+
+    # Función auxiliar interna para construir las tablas de stats
+    def _build_stats_table(df, cols):
+        if not cols:
+            return "<div style='color: var(--muted); font-style: italic;'>No hay variables en esta categoría.</div>"
+        
+        desc = df[cols].describe().round(3)
         rows = ""
-        for col in num_cols:
+        for col in cols:
+            mean_val = desc.loc['mean', col] if 'mean' in desc.index else 'NaN'
+            std_val  = desc.loc['std', col]  if 'std'  in desc.index else 'NaN'
+            min_val  = desc.loc['min', col]  if 'min'  in desc.index else 'NaN'
+            max_val  = desc.loc['max', col]  if 'max'  in desc.index else 'NaN'
+            
             rows += f"""<tr>
               <td>{col}</td>
-              <td class="num-cell">{desc.loc['mean', col]}</td>
-              <td class="num-cell">{desc.loc['std', col]}</td>
-              <td class="num-cell">{desc.loc['min', col]}</td>
-              <td class="num-cell">{desc.loc['max', col]}</td>
+              <td class="num-cell">{mean_val}</td>
+              <td class="num-cell">{std_val}</td>
+              <td class="num-cell">{min_val}</td>
+              <td class="num-cell">{max_val}</td>
             </tr>"""
-        return ui.HTML(f"""
+            
+        return f"""
         <div class="df-table-wrap">
           <table class="df-table">
             <thead><tr><th>Columna</th><th>Media</th><th>Std</th><th>Min</th><th>Max</th></tr></thead>
             <tbody>{rows}</tbody>
           </table>
         </div>
-        """)
+        """
+    
+    @output
+    @render.ui
+    def scale_stats_original():
+        df = df_current()
+        if df is None:
+            return ui.div()
+        num_cols = get_num_cols(df)
+        # Filtramos las que NO han sido escaladas (no terminan en _scaled)
+        raw_cols = [c for c in num_cols if not c.endswith('_scaled')]
+        return ui.HTML(_build_stats_table(df, raw_cols))
+    
+    @output
+    @render.ui
+    def scale_stats_scaled():
+        df = df_current()
+        if df is None: return ui.div()
+        num_cols = get_num_cols(df)
+        # Filtramos SOLO las que YA fueron escaladas
+        scaled_cols = [c for c in num_cols if c.endswith('_scaled')]
+        return ui.HTML(_build_stats_table(df, scaled_cols))
 
     @reactive.Effect
     @reactive.event(input.apply_scale)
@@ -93,28 +124,49 @@ def register_scale_handlers(input, output, df_current, add_log):
         method = input.scale_method()
         col_sel = input.scale_col()
         num_cols = get_num_cols(df)
-        cols = num_cols if col_sel == "_all_" else [col_sel]
-        cols = [c for c in cols if c in df.columns]
 
-        if method == "standard":
-            scaler = StandardScaler()
-            df[cols] = scaler.fit_transform(df[cols])
-            add_log(f"StandardScaler aplicado a: {cols}")
-        elif method == "minmax":
-            scaler = MinMaxScaler()
-            df[cols] = scaler.fit_transform(df[cols])
-            add_log(f"MinMaxScaler aplicado a: {cols}")
-        elif method == "robust":
-            scaler = RobustScaler()
-            df[cols] = scaler.fit_transform(df[cols])
-            add_log(f"RobustScaler aplicado a: {cols}")
-        elif method == "log":
-            for c in cols:
-                df[c] = np.log1p(df[c].clip(lower=0))
-            add_log(f"Log1p transform aplicado a: {cols}")
-        elif method == "sqrt":
-            for c in cols:
-                df[c] = np.sqrt(df[c].clip(lower=0))
-            add_log(f"Sqrt transform aplicado a: {cols}")
+        # Reconstruimos la lista de columnas base válidas
+        base_cols = set()
+        for c in num_cols:
+            if c.endswith('_scaled'): continue
+            elif c.startswith('_'): base_cols.add(c[1:])
+            else: base_cols.add(c)
+            
+        if not base_cols:
+            ui.notification_show("No hay columnas numéricas para escalar.", type="warning")
+            return
 
-        df_current.set(df)
+        cols_to_process = list(base_cols) if col_sel == "_all_" else [col_sel]
+
+        try:
+            for base_col in cols_to_process:
+                source_col = f"_{base_col}" if f"_{base_col}" in df.columns else base_col
+                new_col = f"{base_col}_scaled"
+                
+                # Extraemos la data como un DataFrame de 1 columna para scikit-learn
+                data_to_scale = df[[source_col]]
+                
+                # 2. Aplicamos la matemática y creamos/sobreescribimos la versión _scaled
+                if method == "standard":
+                    df[new_col] = StandardScaler().fit_transform(data_to_scale)
+                elif method == "minmax":
+                    df[new_col] = MinMaxScaler().fit_transform(data_to_scale)
+                elif method == "robust":
+                    df[new_col] = RobustScaler().fit_transform(data_to_scale)
+                elif method == "log":
+                    df[new_col] = np.log1p(df[source_col].clip(lower=0))
+                elif method == "sqrt":
+                    df[new_col] = np.sqrt(df[source_col].clip(lower=0))
+                
+                # Primera vez que se escala se oculta la original
+                if source_col == base_col:
+                    df.rename(columns={base_col: f"_{base_col}"}, inplace=True)
+
+            add_log(f"Scaling '{method}' aplicado a: {cols_to_process}")
+            df_current.set(df)
+            ui.notification_show(f"Escalado '{method}' aplicada exitosamente.", type="success")
+
+        except ValueError as e:
+            ui.notification_show(f"Error estadístico. Verifica valores nulos o infinitos. Detalle: {str(e)[:50]}", type="error")
+        except Exception as e:
+            ui.notification_show(f"Error inesperado: {str(e)[:50]}", type="error")
