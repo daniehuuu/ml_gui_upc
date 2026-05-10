@@ -144,7 +144,6 @@ body {
 
 /* ── Cards ── */
 .card {
-  color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -604,4 +603,165 @@ label { color: var(--muted) !important; font-size: 11px !important; font-family:
   margin-top: 12px;
 }
 .shiny-download-link:hover { background: #00c988; transform: translateY(-1px); }
+
+/* =========================
+   MODELLING METRICS
+========================= */
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.metric-card {
+    background: rgba(20, 28, 52, 0.9);
+    border: 1px solid rgba(0, 255, 200, 0.15);
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 0 12px rgba(0, 255, 200, 0.05);
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 6px;
+}
+
+.metric-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* =========================
+   TABLES
+========================= */
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 0.9rem;
+    border-radius: 14px;
+    overflow: hidden;
+}
+
+.data-table th,
+.data-table td {
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.data-table th {
+    background: rgba(0, 255, 200, 0.08);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.data-table td {
+    color: var(--text);
+}
+
+.data-table tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.data-table tr:hover {
+    background: rgba(0, 255, 200, 0.03);
+}
+
+/* =========================
+   SECTION TITLES
+========================= */
+
+.model-subtitle {
+    color: var(--accent);
+    margin-top: 30px;
+    margin-bottom: 14px;
+    font-size: 1.15rem;
+    letter-spacing: 0.03em;
+    font-weight: 700;
+}
+
+/* =========================
+   INFO BOXES
+========================= */
+
+.model-info-box {
+    background: rgba(20, 28, 52, 0.65);
+    border: 1px solid rgba(0, 255, 200, 0.14);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+}
+
+.model-info-box p {
+    margin: 6px 0;
+    color: var(--text);
+}
+
+.model-info-box ul {
+    margin: 0;
+    padding-left: 20px;
+    color: var(--text);
+}
+
+.model-info-box li {
+    margin: 4px 0;
+}
+
+/* =========================
+   CONFUSION MATRIX (PLOTLY)
+========================= */
+
+.js-plotly-plot {
+    border: 1px solid rgba(0, 255, 200, 0.14);
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(20, 28, 52, 0.45);
+    padding: 8px;
+    margin-top: 12px;
+}
+
+/* =========================
+   CLASSIFICATION REPORT
+========================= */
+
+.classification-table th,
+.classification-table td {
+    text-align: center;
+}
+
+.classification-table th:first-child,
+.classification-table td:first-child {
+    text-align: left;
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.classification-table tbody tr:hover {
+    background: rgba(0, 255, 200, 0.04);
+}
+
+/* =========================
+   LEGACY PRE BLOCK
+   (optional, kept for compatibility)
+========================= */
+
+.classification-report {
+    white-space: pre-wrap;
+    background: rgba(20, 28, 52, 0.9);
+    border: 1px solid rgba(0, 255, 200, 0.18);
+    border-radius: 14px;
+    padding: 18px;
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    overflow-x: auto;
+}
 """

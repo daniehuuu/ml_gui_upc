@@ -66,15 +66,15 @@ def render_eda(df):
         # ui.div(ui.output_ui("eda_summary"), class_="card"),
         ui.div(
             ui.div("Distribuciones (análisis bivariado)", class_="card-title"),
-            ui.div("Matriz de covarianza", class_="card-title"),
-            ui.div(ui.output_ui("eda_cov_plot"), class_="card plot-card"),
-            ui.div("Matriz de correlación", class_="card-title"),
             ui.div(
                 ui.div(ui.input_select("eda_corr_method", "Correlación", {"pearson": "Pearson", "spearman": "Spearman", "kendall": "Kendall"}), class_="ctrl-group"),
                 ui.div(ui.input_selectize("eda_num_cols", "Variables numéricas", {c: c for c in num_cols}, selected=num_default, multiple=True), class_="ctrl-group"),
                 ui.div(ui.input_selectize("eda_cat_cols", "Variables categóricas", {c: c for c in cat_cols}, selected=cat_default, multiple=True), class_="ctrl-group"),
                 class_="ctrl-row"
             ),
+            ui.div("Matriz de covarianza", class_="card-title"),
+            ui.div(ui.output_ui("eda_cov_plot"), class_="card plot-card"),
+            ui.div("Matriz de correlación", class_="card-title"),            
             ui.div(ui.output_ui("eda_corr_plot"), class_="card plot-card"),
             ui.div("Gráfico de correlación", class_="card-title"),
             ui.div(
@@ -211,8 +211,7 @@ def register_eda_handlers(input, output, df_current):
             })
         
         # Generar tabla HTML
-        table_html = "<div class='df-table-wrap'>"
-        table_html += "<table class='df-table' style='width:100%;'>"
+        table_html = "<table class='df-table' style='width:100%;'>"
         table_html += "<thead><tr><th>Métrica</th>" + "".join(f"<th>{col}</th>" for col in num_cols) + "</tr></thead>"
         table_html += "<tbody>"
         
@@ -229,7 +228,7 @@ def register_eda_handlers(input, output, df_current):
                 table_html += "</tr>"
         
         table_html += "</tbody></table>"
-        table_html += "</div>"
+        
         return ui.HTML(table_html)
     
     @output
@@ -268,11 +267,7 @@ def register_eda_handlers(input, output, df_current):
         
         df_stats = pd.DataFrame(stats_list)
         
-        table_html = "<div class='df-table-wrap'>"
-        table_html += df_stats.to_html(classes='df-table', border=0, index=False)
-        table_html += "</div>"
-
-        return ui.HTML(table_html)
+        return ui.HTML(df_stats.to_html(classes='df-table', border=0, index=False))
     
     @output
     @render.ui
