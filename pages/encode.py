@@ -27,6 +27,12 @@ def render_encode(df):
                ui.p("Codificación de variables categóricas", class_="section-sub")),
 
         ui.div(
+            ui.div("COLUMNAS CATEGÓRICAS ACTUALES", class_="card-title"),
+            ui.output_ui("encode_status"),
+            class_="card"
+        ),
+        
+        ui.div(
             ui.div("CONFIGURAR ENCODING", class_="card-title"),
             ui.div(
                 ui.div(ui.input_select("enc_col", "Columna:", {**{"_all_": "— Todas categóricas —"}, **col_opts}), class_="ctrl-group"),
@@ -42,15 +48,11 @@ def render_encode(df):
             class_="card"
         ),
 
-        ui.div(
-            ui.div("COLUMNAS CATEGÓRICAS ACTUALES", class_="card-title"),
-            ui.output_ui("encode_status"),
-            class_="card"
-        ),
+        ui.output_ui("ordinal_config"),
 
         ui.div(
             ui.div("PREVIEW", class_="card-title"),
-            ui.HTML(build_df_preview_html(df)),
+            ui.HTML(build_df_preview_html(df.select_dtypes(include=["object"]))),
             class_="card"
         )
     )
@@ -58,6 +60,21 @@ def render_encode(df):
 
 def register_encode_handlers(input, output, df_current, add_log):
     """Register encoding page handlers"""
+    
+    @output
+    @render.ui
+    def ordinal_config():
+        if input.enc_method() == "ordinal":
+            return ui.div(
+                ui.div("CONFIGURAR ORDINAL", class_="card-title"),
+                ui.div(
+                    ui.p("Ingrese el orden de las categorías separadas por comas"),
+                    ui.input_text("ordinal_order", "Orden:", placeholder="cat1, cat2, cat3"),
+                    class_="ctrl-group"
+                ),
+                class_="card"
+            )
+        return ui.div()
     
     @output
     @render.ui
