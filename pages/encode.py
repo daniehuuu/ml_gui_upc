@@ -33,11 +33,12 @@ def render_encode(df):
             ui.output_ui("encode_status"),
             class_="card"
         ),
-        
+
         ui.div(
             ui.div("CONFIGURAR ENCODING", class_="card-title"),
             ui.div(
-                ui.div(ui.input_select("enc_col", "Columna:", {**{"_all_": "— Todas categóricas —"}, **col_opts}), class_="ctrl-group"),
+                ui.div(ui.input_select("enc_col", "Columna:", {
+                       **{"_all_": "— Todas categóricas —"}, **col_opts}), class_="ctrl-group"),
                 ui.div(ui.input_select("enc_method", "Método:", {
                     "label": "Label Encoding",
                     "onehot": "One-Hot Encoding",
@@ -46,7 +47,8 @@ def render_encode(df):
                 }), class_="ctrl-group"),
                 class_="ctrl-row"
             ),
-            ui.input_action_button("apply_encode", "Aplicar encoding", class_="btn btn-primary"),
+            ui.input_action_button(
+                "apply_encode", "Aplicar encoding", class_="btn btn-primary"),
             class_="card"
         ),
 
@@ -54,7 +56,8 @@ def render_encode(df):
 
         ui.div(
             ui.div("PREVIEW", class_="card-title"),
-            ui.HTML(build_df_preview_html(df.select_dtypes(include=["object"]))),
+            ui.HTML(build_df_preview_html(
+                df.select_dtypes(include=["object"]))),
             class_="card"
         )
     )
@@ -67,7 +70,7 @@ def register_encode_handlers(input, output, df_current, add_log):
 
     def _parsed_ordinal_order():
         return [item.strip() for item in input.ordinal_order().split(",") if item.strip()]
-    
+
     @output
     @render.ui
     def ordinal_config():
@@ -76,7 +79,8 @@ def register_encode_handlers(input, output, df_current, add_log):
                 ui.div("CONFIGURAR ORDINAL", class_="card-title"),
                 ui.div(
                     ui.p("Ingrese el orden de las categorías separadas por comas"),
-                    ui.input_text("ordinal_order", "Orden:", placeholder="cat1, cat2, cat3, ..."),
+                    ui.input_text("ordinal_order", "Orden:",
+                                  placeholder="cat1, cat2, cat3, ..."),
                     class_="ctrl-group"
                 ),
                 ui.output_ui("ordinal_order_table"),
@@ -100,6 +104,19 @@ def register_encode_handlers(input, output, df_current, add_log):
 
         return ui.input_action_button("save_ordinal_order", label, class_=button_class)
 
+    def get_ordinal_mapping():
+        order = [item.strip()
+                 for item in saved_ordinal_order().split(",") if item.strip()]
+        if not order:
+            return None
+        
+        df = df_current()
+        enc_col = input.enc_col()
+        if df is None or enc_col == "_all_" or enc_col not in df.columns:
+            return None
+        values = [str(value) for value in pd.unique(df[enc_col].dropna())]
+        return zip(order, values)
+
     @output
     @render.ui
     def ordinal_order_table():
@@ -109,22 +126,18 @@ def register_encode_handlers(input, output, df_current, add_log):
         if not ordinal_is_saved():
             return ui.div()
 
-        order = [item.strip() for item in saved_ordinal_order().split(",") if item.strip()]
+        order = [item.strip()
+                 for item in saved_ordinal_order().split(",") if item.strip()]
         if not order:
             return ui.div()
-        
-        df = df_current()
-        enc_col = input.enc_col()
-        if df is None or enc_col == "_all_" or enc_col not in df.columns:
+
+        map = get_ordinal_mapping()
+        if map is None:
             return ui.div()
-
-        values = [str(value) for value in pd.unique(df[enc_col].dropna())]
-
-        # enc_col == _all_ return (you must select a single variable)
-        # df[enc_col].unique() 
+        
         rows = "".join(
             f"<tr><td>{number}</td><td>{escape(value)}</td></tr>"
-            for number, value in sorted(zip(order, values))
+            for number, value in sorted(map)
         )
         return ui.HTML(
             f"""
@@ -136,7 +149,7 @@ def register_encode_handlers(input, output, df_current, add_log):
             </div>
             """
         )
-    
+
     @output
     @render.ui
     def encode_status():
@@ -176,16 +189,26 @@ def register_encode_handlers(input, output, df_current, add_log):
                 df[col] = le.fit_transform(df[col].astype(str))
                 add_log(f"Label encoding: '{col}'")
             elif method == "onehot":
-                dummies = pd.get_dummies(df[col], prefix=col, drop_first=False).astype(int)
+                dummies = pd.get_dummies(
+                    df[col], prefix=col, drop_first=False).astype(int)
                 df = pd.concat([df.drop(columns=[col]), dummies], axis=1)
                 add_log(f"One-Hot encoding: '{col}' → {dummies.shape[1]} cols")
+            elif method == "ordinal":
+                map = get_ordinal_mapping()
+                if map is None:
+                    add_log(f"Ordinal encoding: no se aplicó a '{col}'")
+                    continue
+                mapping_dict = {value: number for number, value in map}
+                df[col] = df[col].map(mapping_dict)
+                add_log(f"Ordinal encoding: '{col}' con orden definido")
             elif method == "binary":
                 if df[col].nunique() == 2:
                     vals = df[col].unique()
                     df[col] = df[col].map({vals[0]: 0, vals[1]: 1})
                     add_log(f"Binary encoding: '{col}'")
                 else:
-                    add_log(f"Binary encoding: '{col}' tiene {df[col].nunique()} únicos (se necesitan exactamente 2)")
+                    add_log(
+                        f"Binary encoding: '{col}' tiene {df[col].nunique()} únicos (se necesitan exactamente 2)")
 
         df_current.set(df)
 
