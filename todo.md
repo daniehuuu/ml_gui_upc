@@ -8,6 +8,9 @@
  - [] Veo que eda_dist_plot es capaz de graficar un histograma con su gráfica de densidad KDE. Me gustaría que se implemente esa gráfica KDE en eda_numeric_stats tambié. Entonces a eda_numeric_stats se le añadiría (dentro del mismo histograma) el gráfica KDE. No elimines el marginal = box.
  - [] Importar dataset desde kaggle
  - [] Add individual select-bound-output and code for input
+ - [x] Fix the table display and add and horizontal scroll wheel.
+ - [] Scatter matrix with plotly. 
+ - [] .csv without headings not working properly
 
  ```py
 # This was not working

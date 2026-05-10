@@ -92,15 +92,15 @@ def server(input, output, session):
     ops_log = reactive.Value([])
     dtype_manual_state = reactive.Value({})
     toast_state = reactive.Value(None)
-    load_config = reactive.Value({"separator": ";", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
+    load_config = reactive.Value({"separator": ",", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
 
     # ── Helper Functions
     def resolve_separator():
-        choice = input.load_sep() if hasattr(input, "load_sep") else ";"
+        choice = input.load_sep() if hasattr(input, "load_sep") else ","
         if choice == "custom":
             custom_value = (input.load_custom_sep() if hasattr(input, "load_custom_sep") else "") or "|"
             return custom_value
-        return choice or ";"
+        return choice or ","
 
     def resolve_header():
         header_choice = input.load_header() if hasattr(input, "load_header") else "infer"
@@ -110,11 +110,13 @@ def server(input, output, session):
         encoding_value = input.load_encoding() if hasattr(input, "load_encoding") else "utf-8"
         return encoding_value or "utf-8"
 
-    def load_csv_file(file_path, file_name=None):
+    def load_csv_file(file_path=None, file_name=None):
+        if file_path is None:
+            file_path = Path(__file__).resolve().parent / "data" / "EDA" / "dynamic_supply_chain_logistics_dataset.csv"
         separator = resolve_separator()
         header = resolve_header()
         encoding = resolve_encoding()
-        df, trial_encoding, last_error = read_csv_dataset(file_path, separator, header, encoding)
+        df, trial_encoding, last_error = read_csv_dataset(str(file_path), separator, header, encoding)
         if df is None:
             return None, f"No fue posible leer el archivo con separador {separator!r}. Error: {last_error}"
 
@@ -202,10 +204,7 @@ def server(input, output, session):
     @reactive.Effect
     def _load_default():
         try:
-            default_path = Path(__file__).resolve().with_name("bupa.csv")
-            if not default_path.exists():
-                default_path = Path(__file__).resolve().parent / "bupa.csv"
-            df, error_message = load_csv_file(str(default_path), default_path.name)
+            df, error_message = load_csv_file()
             if error_message:
                 ops_log.set([error_message])
         except Exception as e:
