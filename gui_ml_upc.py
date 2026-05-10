@@ -112,7 +112,7 @@ def server(input, output, session):
 
     def load_csv_file(file_path=None, file_name=None):
         if file_path is None:
-            file_path = Path(__file__).resolve().parent / "data" / "EDA" / "under_18_thyroid_risk_data.csv"
+            file_path = Path(__file__).resolve().parent / "data" / "EDA" / "dynamic_supply_chain_logistics_dataset.csv"
         separator = resolve_separator()
         header = resolve_header()
         encoding = resolve_encoding()
