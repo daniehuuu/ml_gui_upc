@@ -98,9 +98,21 @@ def register_encode_handlers(input, output, df_current, add_log):
                 df[col] = le.fit_transform(df[col].astype(str))
                 add_log(f"Label encoding: '{col}'")
             elif method == "onehot":
-                dummies = pd.get_dummies(df[col], prefix=col, drop_first=False).astype(int)
-                df = pd.concat([df.drop(columns=[col]), dummies], axis=1)
-                add_log(f"One-Hot encoding: '{col}' → {dummies.shape[1]} cols")
+                dummies = pd.get_dummies(
+                    df[col], prefix=col, drop_first=False).astype(int)
+                dummies.columns = [f"{c}_encoded" for c in dummies.columns]
+                df = pd.concat([df, dummies], axis=1)
+                add_log(f"One-Hot encoding: '{col}' → {dummies.shape[1]} cols (se conserva la columna original; sufijo '_encoded' añadido)")
+            elif method == "ordinal":
+                map = get_ordinal_mapping()
+                if map is None:
+                    add_log(f"Ordinal encoding: no se aplicó a '{col}'")
+                    continue
+                mapping_dict = {value: number for number, value in map}
+                encoded_col = f"{col}_encoded"
+                df[encoded_col] = df[col].map(mapping_dict)
+                df[encoded_col] = df[encoded_col].astype("Int64")
+                add_log(f"Ordinal encoding: '{col}' → '{encoded_col}' con orden definido")
             elif method == "binary":
                 if df[col].nunique() == 2:
                     vals = df[col].unique()
