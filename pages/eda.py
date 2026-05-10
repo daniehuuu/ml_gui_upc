@@ -66,15 +66,15 @@ def render_eda(df):
         # ui.div(ui.output_ui("eda_summary"), class_="card"),
         ui.div(
             ui.div("Distribuciones (análisis bivariado)", class_="card-title"),
-            ui.div("Matriz de covarianza", class_="card-title"),
-            ui.div(ui.output_ui("eda_cov_plot"), class_="card plot-card"),
-            ui.div("Matriz de correlación", class_="card-title"),
             ui.div(
                 ui.div(ui.input_select("eda_corr_method", "Correlación", {"pearson": "Pearson", "spearman": "Spearman", "kendall": "Kendall"}), class_="ctrl-group"),
                 ui.div(ui.input_selectize("eda_num_cols", "Variables numéricas", {c: c for c in num_cols}, selected=num_default, multiple=True), class_="ctrl-group"),
                 ui.div(ui.input_selectize("eda_cat_cols", "Variables categóricas", {c: c for c in cat_cols}, selected=cat_default, multiple=True), class_="ctrl-group"),
                 class_="ctrl-row"
             ),
+            ui.div("Matriz de covarianza", class_="card-title"),
+            ui.div(ui.output_ui("eda_cov_plot"), class_="card plot-card"),
+            ui.div("Matriz de correlación", class_="card-title"),            
             ui.div(ui.output_ui("eda_corr_plot"), class_="card plot-card"),
             ui.div("Gráfico de correlación", class_="card-title"),
             ui.div(
