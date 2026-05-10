@@ -6,6 +6,7 @@ from sklearn.preprocessing import LabelEncoder
 import pandas as pd
 from app_helpers import (
     df_preview_html as build_df_preview_html,
+    df_preview_html_encoded as build_df_preview_html_encoded,
     get_cat_cols,
 )
 
@@ -15,11 +16,12 @@ def render_encode(df):
     if df is None:
         return ui.div("Sin datos")
     cat_cols = get_cat_cols(df)
-    if not cat_cols:
+    encoded_cols = [c for c in df.columns if str(c).endswith("encoded")]
+    if not cat_cols and not encoded_cols:
         return ui.div(
             ui.div(ui.tags.h2("Encoding", class_="section-title"),
                    ui.p("Codificación de variables categóricas", class_="section-sub")),
-            ui.div("No hay columnas categóricas disponibles.", class_="card")
+            ui.div("No hay columnas categóricas disponibles ni procesos de encoding aplicados", class_="card")
         )
 
     col_opts = {c: f"{c} ({df[c].nunique()} únicos)" for c in cat_cols}
@@ -58,6 +60,13 @@ def render_encode(df):
             ui.div("PREVIEW", class_="card-title"),
             ui.HTML(build_df_preview_html(
                 df.select_dtypes(include=["object"]))),
+            class_="card"
+        ),
+        
+        ui.div(
+            ui.div("PREVIEW Encoded", class_="card-title"),
+            ui.HTML(build_df_preview_html_encoded(
+                df)),
             class_="card"
         )
     )
@@ -186,26 +195,34 @@ def register_encode_handlers(input, output, df_current, add_log):
                 continue
             if method == "label":
                 le = LabelEncoder()
-                df[col] = le.fit_transform(df[col].astype(str))
-                add_log(f"Label encoding: '{col}'")
+                encoded_col = f"{col}_encoded"
+                df[encoded_col] = df[col]
+                df[encoded_col] = le.fit_transform(df[encoded_col].astype(str))
+                df[encoded_col] = df[encoded_col].astype("Int64")
+                add_log(f"Label encoding: '{col}' → '{encoded_col}'")
             elif method == "onehot":
                 dummies = pd.get_dummies(
                     df[col], prefix=col, drop_first=False).astype(int)
+                dummies.columns = [f"{c}_encoded" for c in dummies.columns]
                 df = pd.concat([df.drop(columns=[col]), dummies], axis=1)
-                add_log(f"One-Hot encoding: '{col}' → {dummies.shape[1]} cols")
+                add_log(f"One-Hot encoding: '{col}' → {dummies.shape[1]} cols (sufijo '_encoded' añadido)")
             elif method == "ordinal":
                 map = get_ordinal_mapping()
                 if map is None:
                     add_log(f"Ordinal encoding: no se aplicó a '{col}'")
                     continue
                 mapping_dict = {value: number for number, value in map}
-                df[col] = df[col].map(mapping_dict)
-                add_log(f"Ordinal encoding: '{col}' con orden definido")
+                encoded_col = f"{col}_encoded"
+                df[encoded_col] = df[col].map(mapping_dict)
+                df[encoded_col] = df[encoded_col].astype("Int64")
+                add_log(f"Ordinal encoding: '{col}' → '{encoded_col}' con orden definido")
             elif method == "binary":
                 if df[col].nunique() == 2:
                     vals = df[col].unique()
-                    df[col] = df[col].map({vals[0]: 0, vals[1]: 1})
-                    add_log(f"Binary encoding: '{col}'")
+                    encoded_col = f"{col}_encoded"
+                    df[encoded_col] = df[col].map({vals[0]: 0, vals[1]: 1})
+                    # df = df.drop(columns=[col])
+                    add_log(f"Binary encoding: '{col}' → '{encoded_col}'")
                 else:
                     add_log(
                         f"Binary encoding: '{col}' tiene {df[col].nunique()} únicos (se necesitan exactamente 2)")

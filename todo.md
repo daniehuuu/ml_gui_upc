@@ -10,6 +10,7 @@
  - [] Add individual select-bound-output and code for input
  - [x] Fix the table display and add and horizontal scroll wheel.
  - [] Scatter matrix with plotly. 
+ - [] .csv without headings not working properly
 
  ```py
 # This was not working
