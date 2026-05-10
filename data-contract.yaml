@@ -1,0 +1,197 @@
+kind: DataContract
+id: aldimi-ml-ecosystem
+name: ALDIMI_ML_Ecosystem_Contract
+version: 1.0.0
+status: active
+description:
+  purpose: "Provee la estructura de datos estandarizada para la comunicación entre el módulo de Inteligencia Artificial (IA), Base de Datos y los modelos de Machine Learning (ML) del ecosistema ALDIMI."
+  usage: "Utilizado por el equipo de ML para consumir variables predictoras limpias y devolver predicciones logísticas (inventario) y clínicas (riesgo de cáncer tiroideo) a los dashboards operativos."
+  limitations: "El modelo clínico está restringido estrictamente a pacientes pediátricos (Age < 18). Las predicciones logísticas tienen un horizonte máximo de 14 días."
+  customProperties:
+    - property: "sensitivity"
+      value: "high"
+      description: "El esquema clínico contiene datos médicos sensibles. Requiere anonimización (Patient ID enmascarado)."
+  authoritativeDefinitions:
+    - url: "https://www.un.org/sustainabledevelopment/es/health/"
+      type: "businessDefinition"
+      description: "Alineación con el ODS 3: Salud y Bienestar (ALDIMI)."
+
+team:
+  name: ml_group_2
+  description: Equipo de Machine Learning responsable de los motores predictivos.
+  members:
+    - username: u202310474@upc.edu.pe
+      name: Patricia Rojas Sánchez
+      role: Owner (Data Architect)
+    - username: u202312230@upc.edu.pe
+      name: Daniel Huapaya Vargas
+      role: ML Engineer
+    - username: u202317287@upc.edu.pe
+      name: Camila Ibarra Cabrera
+      role: Data Scientist
+    - username: u20191c439@upc.edu.pe
+      name: Sofia Miranda Cardenas
+      role: MLOps / Developer
+    - username: u201616851@upc.edu.pe
+      name: Lizbeth Olivera Alvarez
+      role: MLOps / Developer
+
+servers:
+  - server: development
+    environment: dev
+    type: rest_api
+    host: localhost
+    port: 8000
+    description: "Entorno local para el Live Demo (Hito 2 y 4)"
+
+schema:
+  # 1. ESQUEMA DE ENVÍO: LOGÍSTICA (IA -> ML)
+  - name: logistics_request
+    physicalType: JSON
+    description: Variables predictoras enviadas al Random Forest Regressor para predicción de inventario.
+    properties:
+      - name: transaction_id
+        logicalType: string
+        physicalType: UUID
+        required: true
+        unique: true
+      - name: historical_demand
+        logicalType: float
+        description: Demanda histórica de productos (alta varianza esperada).
+        required: true
+      - name: handling_equipment_availability
+        logicalType: float
+        description: Disponibilidad de equipos operativos (Rango 0 a 1).
+        required: true
+      - name: shipping_costs
+        logicalType: float
+        description: Costos de transporte y envío.
+        required: true
+      - name: lead_time_days
+        logicalType: float
+        description: Tiempo de entrega del proveedor en días.
+        required: true
+      - name: delivery_time_deviation
+        logicalType: float
+        description: Desviación en tiempo real vs esperado en horas.
+        required: true
+      - name: customs_clearance_time
+        logicalType: float
+        description: Tiempo de despacho aduanero.
+        required: true
+      - name: disruption_likelihood_score
+        logicalType: float
+        description: Probabilidad de interrupciones logísticas (Rango 0 a 1).
+        required: true
+      - name: weather_condition_severity
+        logicalType: float
+        description: Severidad de las condiciones climáticas (Rango 0 a 1).
+        required: true
+      - name: supplier_reliability_score
+        logicalType: float
+        description: Nivel de confiabilidad del proveedor (Rango 0 a 1).
+        required: true
+      - name: delay_probability
+        logicalType: float
+        description: Probabilidad de retraso en entrega (Rango 0 a 1).
+        required: true
+
+  # 2. ESQUEMA DE RESPUESTA: LOGÍSTICA (ML -> DASHBOARD)
+  - name: logistics_response
+    physicalType: JSON
+    description: Predicción de inventario generada por el modelo de regresión.
+    properties:
+      - name: transaction_id
+        logicalType: string
+        physicalType: UUID
+        required: true
+      - name: predicted_warehouse_inventory_level
+        logicalType: float
+        description: Nivel estimado de inventario en almacén.
+        required: true
+      - name: prediction_timestamp
+        logicalType: timestamp
+        description: Fecha y hora en la que se generó la predicción.
+        required: true
+
+  # 3. ESQUEMA DE ENVÍO: CLÍNICA (IA -> ML)
+  - name: clinical_request
+    physicalType: JSON
+    description: Historial médico pediátrico enviado al Random Forest Classifier.
+    properties:
+      - name: patient_id
+        logicalType: string
+        physicalType: UUID
+        description: ID anonimizado del paciente pediátrico.
+        required: true
+        unique: true
+      - name: TSH_Level
+        logicalType: float
+        description: Nivel de hormona estimulante de tiroides.
+        required: true
+      - name: T3_Level
+        logicalType: float
+        description: Nivel de triyodotironina.
+        required: true
+      - name: T4_Level
+        logicalType: float
+        description: Nivel de tiroxina.
+        required: true
+      - name: Nodule_Size
+        logicalType: float
+        description: Tamaño de nódulo tiroideo.
+        required: true
+      - name: Family_History
+        logicalType: boolean
+        description: Presencia de antecedentes familiares.
+        required: true
+      - name: Radiation_Exposure
+        logicalType: boolean
+        description: Exposición previa a radiación.
+        required: true
+      - name: Iodine_Deficiency
+        logicalType: boolean
+        description: Deficiencia de yodo.
+        required: true
+      - name: Smoking
+        logicalType: boolean
+        description: Hábito de fumar.
+        required: true
+      - name: Obesity
+        logicalType: boolean
+        description: Condición de obesidad.
+        required: true
+      - name: Diabetes
+        logicalType: boolean
+        description: Presencia de diabetes.
+        required: true
+
+  # 4. ESQUEMA DE RESPUESTA: CLÍNICA (ML -> DASHBOARD)
+  - name: clinical_response
+    physicalType: JSON
+    description: Clasificación de riesgo generada por el modelo para priorización.
+    properties:
+      - name: patient_id
+        logicalType: string
+        physicalType: UUID
+        required: true
+      - name: predicted_Thyroid_Cancer_Risk
+        logicalType: string
+        description: Nivel de riesgo predicho (Low, Medium, High).
+        required: true
+      - name: risk_probability
+        logicalType: float
+        description: Porcentaje de confianza del modelo sobre la predicción (Ej. 0.85).
+        required: true
+      - name: prediction_timestamp
+        logicalType: timestamp
+        description: Fecha y hora del diagnóstico predictivo.
+        required: true
+
+tags:
+  - machine-learning
+  - predictive-analytics
+  - healthcare
+  - supply-chain
+  - aldimi
+contractCreatedTs: "2026-05-09T10:00:00Z"
