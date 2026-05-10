@@ -18,7 +18,7 @@ def sidebar_nav_ui(current_page):
         nav_button("nav_outlier", "🎯", "Outliers", "outlier"),
         nav_button("nav_encode", "🔢", "Encoding", "encode"),
         nav_button("nav_scale", "⚖️", "Scaling", "scale"),
-        nav_button("nav_drop", "🗑️", "Drop Columns", "drop"),
+        nav_button("nav_drop", "🗑️", "Feature Selection", "drop"),
         nav_button("nav_export", "💾", "Export", "export"),
         nav_button("nav_docs", "📚", "Docs", "docs"),
     )
