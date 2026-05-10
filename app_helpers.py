@@ -79,12 +79,22 @@ def get_cat_cols(df):
     return df.select_dtypes(include="object").columns.tolist()
 
 
-def df_preview_html(df, max_rows=8):
+def df_preview_html(df, max_rows=8, just_encoded=False):
     num_cols = df.select_dtypes(include=np.number).columns.tolist()
+    
+    if just_encoded:
+        encoded_cols = [col for col in df.columns if str(col).endswith("_encoded")]
+        if not encoded_cols:
+            return "<div style='color:var(--muted);font-style:italic;'>No se han aplicado encodings aún</div>"
+        cols_to_display = encoded_cols
+        num_cols = [col for col in encoded_cols if col in num_cols]
+    else:
+        cols_to_display = df.columns.tolist()
+    
     rows = []
     for _, row in df.head(max_rows).iterrows():
         cells = []
-        for col in df.columns:
+        for col in cols_to_display:
             val = row[col]
             if pd.isna(val):
                 cells.append("<td class='null-cell'>NaN</td>")
@@ -93,7 +103,7 @@ def df_preview_html(df, max_rows=8):
             else:
                 cells.append(f"<td>{escape(str(val))}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
-    headers = "".join(f"<th>{escape(str(c))}</th>" for c in df.columns)
+    headers = "".join(f"<th>{escape(str(c))}</th>" for c in cols_to_display)
     return f"""
     <div class="df-table-wrap">
       <table class="df-table">
@@ -102,10 +112,12 @@ def df_preview_html(df, max_rows=8):
       </table>
     </div>
     <div style="color:var(--muted);font-size:11px;margin-top:6px;">
-      Mostrando {min(max_rows, len(df))} de {len(df)} filas · {df.shape[1]} columnas
+      Mostrando {min(max_rows, len(df))} de {len(df)} filas · {len(cols_to_display)} columnas
     </div>
     """
 
+def df_preview_html_encoded(df, max_rows=8):
+    return df_preview_html(df, max_rows, just_encoded=True)  
 
 def missing_report_html(df):
     rows = []
