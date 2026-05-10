@@ -7,6 +7,7 @@ from .encode import render_encode, register_encode_handlers
 from .scale import render_scale, register_scale_handlers
 from .outlier import render_outlier, register_outlier_handlers
 from .drop import render_drop, register_drop_handlers
+from .model import render_model, register_model_handlers
 from .export import render_export, register_export_handlers
 from .docs import render_docs
 

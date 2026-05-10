@@ -30,6 +30,8 @@ from pages import (
     register_drop_handlers,
     render_export,
     register_export_handlers,
+    render_model,
+    register_model_handlers,
     render_docs,
 )
 
@@ -241,6 +243,10 @@ def server(input, output, session):
     def _(): current_page.set("drop")
 
     @reactive.Effect
+    @reactive.event(input.nav_model)
+    def _(): current_page.set("model")
+
+    @reactive.Effect
     @reactive.event(input.nav_export)
     def _(): current_page.set("export")
 
@@ -360,6 +366,7 @@ def server(input, output, session):
     register_scale_handlers(input, output, df_current, add_log)
     register_outlier_handlers(input, output, df_current, add_log)
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
+    register_model_handlers(input, output, df_current, add_log)
     register_export_handlers(input, output, df_current)
 
     # ─────────────────────────────────────────────────────────────
@@ -384,6 +391,8 @@ def server(input, output, session):
             return render_outlier(df)
         elif page == "drop":
             return render_drop(df)
+        elif page == "model":
+            return render_model(df)
         elif page == "export":
             return render_export(df, df_original, ops_log)
         elif page == "docs":
