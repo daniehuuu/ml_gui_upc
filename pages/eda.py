@@ -211,8 +211,7 @@ def register_eda_handlers(input, output, df_current):
             })
         
         # Generar tabla HTML
-        table_html = "<div class='df-table-wrap'>"
-        table_html += "<table class='df-table' style='width:100%;'>"
+        table_html = "<table class='df-table' style='width:100%;'>"
         table_html += "<thead><tr><th>Métrica</th>" + "".join(f"<th>{col}</th>" for col in num_cols) + "</tr></thead>"
         table_html += "<tbody>"
         
@@ -229,7 +228,7 @@ def register_eda_handlers(input, output, df_current):
                 table_html += "</tr>"
         
         table_html += "</tbody></table>"
-        table_html += "</div>"
+        
         return ui.HTML(table_html)
     
     @output
@@ -268,11 +267,7 @@ def register_eda_handlers(input, output, df_current):
         
         df_stats = pd.DataFrame(stats_list)
         
-        table_html = "<div class='df-table-wrap'>"
-        table_html += df_stats.to_html(classes='df-table', border=0, index=False)
-        table_html += "</div>"
-
-        return ui.HTML(table_html)
+        return ui.HTML(df_stats.to_html(classes='df-table', border=0, index=False))
     
     @output
     @render.ui

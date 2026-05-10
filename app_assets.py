@@ -144,7 +144,6 @@ body {
 
 /* ── Cards ── */
 .card {
-  color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
