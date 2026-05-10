@@ -1,4 +1,6 @@
 """Encoding page"""
+from html import escape
+
 from shiny import ui, render, reactive
 from sklearn.preprocessing import LabelEncoder
 import pandas as pd
@@ -39,7 +41,7 @@ def render_encode(df):
                 ui.div(ui.input_select("enc_method", "Método:", {
                     "label": "Label Encoding",
                     "onehot": "One-Hot Encoding",
-                    "ordinal": "Ordinal (manual no disp.)",
+                    "ordinal": "Ordinal (manual)",
                     "binary": "Binary (0/1 si 2 únicos)",
                 }), class_="ctrl-group"),
                 class_="ctrl-row"
@@ -60,6 +62,11 @@ def render_encode(df):
 
 def register_encode_handlers(input, output, df_current, add_log):
     """Register encoding page handlers"""
+    saved_ordinal_order = reactive.Value("")
+    ordinal_is_saved = reactive.Value(False)
+
+    def _parsed_ordinal_order():
+        return [item.strip() for item in input.ordinal_order().split(",") if item.strip()]
     
     @output
     @render.ui
@@ -69,12 +76,66 @@ def register_encode_handlers(input, output, df_current, add_log):
                 ui.div("CONFIGURAR ORDINAL", class_="card-title"),
                 ui.div(
                     ui.p("Ingrese el orden de las categorías separadas por comas"),
-                    ui.input_text("ordinal_order", "Orden:", placeholder="cat1, cat2, cat3"),
+                    ui.input_text("ordinal_order", "Orden:", placeholder="cat1, cat2, cat3, ..."),
                     class_="ctrl-group"
                 ),
+                ui.output_ui("ordinal_order_table"),
+                ui.output_ui("ordinal_save_button"),
                 class_="card"
             )
         return ui.div()
+
+    @output
+    @render.ui
+    def ordinal_save_button():
+        if input.enc_method() != "ordinal":
+            return ui.div()
+
+        if ordinal_is_saved():
+            label = "guardado"
+            button_class = "btn btn-success"
+        else:
+            label = "Guardar orden"
+            button_class = "btn btn-primary"
+
+        return ui.input_action_button("save_ordinal_order", label, class_=button_class)
+
+    @output
+    @render.ui
+    def ordinal_order_table():
+        if input.enc_method() != "ordinal":
+            return ui.div()
+
+        if not ordinal_is_saved():
+            return ui.div()
+
+        order = [item.strip() for item in saved_ordinal_order().split(",") if item.strip()]
+        if not order:
+            return ui.div()
+        
+        df = df_current()
+        enc_col = input.enc_col()
+        if df is None or enc_col == "_all_" or enc_col not in df.columns:
+            return ui.div()
+
+        values = [str(value) for value in pd.unique(df[enc_col].dropna())]
+
+        # enc_col == _all_ return (you must select a single variable)
+        # df[enc_col].unique() 
+        rows = "".join(
+            f"<tr><td>{number}</td><td>{escape(value)}</td></tr>"
+            for number, value in sorted(zip(order, values))
+        )
+        return ui.HTML(
+            f"""
+            <div class="df-table-wrap">
+              <table class="df-table">
+                <thead><tr><th>Valor</th><th>Orden</th></tr></thead>
+                <tbody>{rows}</tbody>
+              </table>
+            </div>
+            """
+        )
     
     @output
     @render.ui
@@ -86,7 +147,7 @@ def register_encode_handlers(input, output, df_current, add_log):
         if not cat_cols:
             return ui.HTML('<span style="color:var(--accent)">✓ Sin columnas categóricas</span>')
         rows = "".join(
-            f"<tr><td>{c}</td><td>{df[c].nunique()}</td><td>{', '.join(str(v) for v in df[c].unique()[:5])}{'...' if df[c].nunique() > 5 else ''}</td></tr>"
+            f"<tr><td>{c}</td><td>{df[c].nunique()}</td><td>{', '.join(str(v) for v in df[c].unique()[:25])}{'...' if df[c].nunique() > 25 else ''}</td></tr>"
             for c in cat_cols
         )
         return ui.HTML(f"""
@@ -127,3 +188,29 @@ def register_encode_handlers(input, output, df_current, add_log):
                     add_log(f"Binary encoding: '{col}' tiene {df[col].nunique()} únicos (se necesitan exactamente 2)")
 
         df_current.set(df)
+
+    @reactive.Effect
+    @reactive.event(input.save_ordinal_order)
+    def _save_ordinal_order():
+        if input.enc_method() != "ordinal":
+            return
+
+        order = _parsed_ordinal_order()
+        if not order:
+            add_log("Ordinal encoding: no se definió un orden válido")
+            return
+
+        saved_ordinal_order.set(", ".join(order))
+        ordinal_is_saved.set(True)
+        add_log(f"Ordinal encoding: orden guardado -> {saved_ordinal_order()}")
+
+    @reactive.Effect
+    def _reset_saved_state_on_change():
+        if input.enc_method() != "ordinal":
+            ordinal_is_saved.set(False)
+            saved_ordinal_order.set("")
+            return
+
+        current_order = ", ".join(_parsed_ordinal_order())
+        if current_order != saved_ordinal_order():
+            ordinal_is_saved.set(False)
