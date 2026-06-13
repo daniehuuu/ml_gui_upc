@@ -1,5 +1,6 @@
 """Page modules for the DataPrep Studio app"""
 
+from .home import render_home
 from .overview import render_overview
 from .eda import render_eda, register_eda_handlers
 from .missing import render_missing, register_missing_handlers
@@ -14,6 +15,7 @@ from .export import render_export, register_export_handlers
 from .docs import render_docs
 
 __all__ = [
+    "render_home",
     "render_overview",
     "render_eda",
     "register_eda_handlers",

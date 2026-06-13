@@ -15,6 +15,7 @@ from app_navigation import sidebar_nav_ui
 
 # Import page modules
 from pages import (
+    render_home,
     render_overview,
     render_eda,
     register_eda_handlers,
@@ -92,7 +93,8 @@ app_ui = ui.page_fluid(
 def server(input, output, session):
 
     # ── State Management
-    current_page = reactive.Value("overview")
+    current_page = reactive.Value("home")
+    current_role = reactive.Value("user")
     df_original = reactive.Value(None)
     df_current = reactive.Value(None)
     encoding_state = reactive.Value({})
@@ -224,54 +226,123 @@ def server(input, output, session):
 
     # ── Navigation handlers
     @reactive.Effect
-    @reactive.event(input.nav_overview)
-    def _(): current_page.set("overview")
+    @reactive.event(input.nav_home)
+    def _():
+        current_page.set("home")
+
 
     @reactive.Effect
     @reactive.event(input.nav_patient_search)
-    def _(): current_page.set("patient_search")
+    def _():
+        current_page.set("patient_search")
+
 
     @reactive.Effect
     @reactive.event(input.nav_resource_availability)
     def _():
         current_page.set("resource_availability")
 
+
+    @reactive.Effect
+    @reactive.event(input.nav_overview)
+    def _():
+        current_page.set("overview")
+
+
     @reactive.Effect
     @reactive.event(input.nav_eda)
-    def _(): current_page.set("eda")
+    def _():
+        current_page.set("eda")
+
 
     @reactive.Effect
     @reactive.event(input.nav_missing)
-    def _(): current_page.set("missing")
+    def _():
+        current_page.set("missing")
+
 
     @reactive.Effect
     @reactive.event(input.nav_encode)
-    def _(): current_page.set("encode")
+    def _():
+        current_page.set("encode")
+
 
     @reactive.Effect
     @reactive.event(input.nav_scale)
-    def _(): current_page.set("scale")
+    def _():
+        current_page.set("scale")
+
 
     @reactive.Effect
     @reactive.event(input.nav_outlier)
-    def _(): current_page.set("outlier")
+    def _():
+        current_page.set("outlier")
+
 
     @reactive.Effect
     @reactive.event(input.nav_drop)
-    def _(): current_page.set("drop")
+    def _():
+        current_page.set("drop")
+
 
     @reactive.Effect
     @reactive.event(input.nav_model)
-    def _(): current_page.set("model")
+    def _():
+        current_page.set("model")
+
 
     @reactive.Effect
     @reactive.event(input.nav_export)
-    def _(): current_page.set("export")
+    def _():
+        current_page.set("export")
+
 
     @reactive.Effect
     @reactive.event(input.nav_docs)
-    def _(): current_page.set("docs")
+    def _():
+        current_page.set("docs")
 
+
+    # ── Cambio de rol / vista ─────────────────────────────
+    @reactive.Effect
+    @reactive.event(input.user_role)
+    def _():
+        role = input.user_role()
+        current_role.set(role)
+
+        user_pages = ["home", "patient_search", "resource_availability"]
+        analyst_pages = [
+            "home",
+            "overview",
+            "eda",
+            "missing",
+            "outlier",
+            "encode",
+            "scale",
+            "drop",
+            "model",
+            "export",
+            "docs",
+        ]
+
+        if role == "user" and current_page() not in user_pages:
+            current_page.set("home")
+
+        elif role == "analyst" and current_page() not in analyst_pages:
+            current_page.set("home")
+
+
+    # ── Botones rápidos del Home ─────────────────────────────
+    @reactive.Effect
+    @reactive.event(input.quick_patient)
+    def _():
+        current_page.set("patient_search")
+
+
+    @reactive.Effect
+    @reactive.event(input.quick_resource)
+    def _():
+        current_page.set("resource_availability")
     # ── Upload handlers
     @reactive.Effect
     @reactive.event(input.upload_csv)
@@ -397,7 +468,9 @@ def server(input, output, session):
     def main_content():
         page = current_page()
         df = df_current()
-        if page == "overview":
+        if page == "home":
+            return render_home(df_original())
+        elif page == "overview":
             return render_overview(df, load_config, dtype_manual_state)
         elif page == "patient_search":
             return render_patient_search(df_original())
@@ -427,7 +500,8 @@ def server(input, output, session):
     @render.ui
     def sidebar_nav():
         page = current_page()
-        return sidebar_nav_ui(page)
+        role = current_role()
+        return sidebar_nav_ui(page, role)
 
     # ─────────────────────────────────────────────────────────────
     # SIDEBAR STATUS
