@@ -98,6 +98,10 @@ def server(input, output, session):
     dtype_manual_state = reactive.Value({})
     toast_state = reactive.Value(None)
     load_config = reactive.Value({"separator": ";", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
+    
+    # Estados globales para compartir modelos entre páginas
+    classification_model_state = reactive.Value(None)
+    regression_model_state = reactive.Value(None)
 
     # ── Helper Functions
     def resolve_separator():
@@ -373,7 +377,7 @@ def server(input, output, session):
     register_scale_handlers(input, output, df_current, add_log)
     register_outlier_handlers(input, output, df_current, add_log)
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
-    register_model_handlers(input, output, df_current, add_log, encoding_state)
+    register_model_handlers(input,output,df_current,add_log,encoding_state,classification_model_state,regression_model_state)    
     register_patient_search_handlers(input, output, df_current)
     register_export_handlers(input, output, df_current)
 

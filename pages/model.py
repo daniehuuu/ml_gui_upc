@@ -115,7 +115,7 @@ def render_model(df):
     )
 
 
-def register_model_handlers(input, output, df_current, add_log, encoding_state):
+def register_model_handlers(input,output,df_current,add_log,encoding_state,classification_model_state,regression_model_state):
     """Register modelling page handlers"""
 
     model_state = reactive.Value(None)
@@ -263,7 +263,7 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     scoring="f1_macro",
                     cv=5,
                     n_jobs=-1,
-                    verbose=0
+                    verbose=True
                 )
 
                 grid.fit(X_train_res, y_train_res)
@@ -350,6 +350,19 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     "y_test": y_test,
                     "class_names": class_names,
                 })
+
+                classification_model_state.set({
+                    "problem_type": "classification",
+                    "target": target,
+                    "features": features,
+                    "best_model": best_model,
+                    "class_names": class_names,
+                    "target_encoder": target_encoder,
+                    "encoding_state": encoding_state(),
+                    "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+                add_log(f"Modelo global de clasificación guardado: {target} | Features: {len(features)}")
 
                 prediction_state.set(None)
 
@@ -480,6 +493,14 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     "X_test": X_test,
                     "y_test": y_test,
                     "y_pred": y_pred,
+                })
+
+                regression_model_state.set({
+                    "problem_type": "regression",
+                    "target": target,
+                    "features": features,
+                    "best_model": model,
+                    "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 })
 
                 prediction_state.set(None)
