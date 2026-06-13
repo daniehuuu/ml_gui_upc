@@ -1,23 +1,33 @@
-"""Classification modelling page"""
+"""Modelling page: Classification + Linear Regression"""
 from shiny import ui, render, reactive
 from app_helpers import get_num_cols
 
 import time
+import random
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import random
 
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score,
-    f1_score, classification_report, confusion_matrix
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    confusion_matrix,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
 )
 from sklearn.preprocessing import LabelEncoder
 from imblearn.over_sampling import SMOTE
 
 
 def render_model(df):
+    """Render modelling page"""
     if df is None:
         return ui.div("Sin datos")
 
@@ -25,12 +35,27 @@ def render_model(df):
 
     return ui.div(
         ui.div(
-            ui.tags.h2("Classification Modelling", class_="section-title"),
-            ui.p("Random Forest Classifier con SMOTE y GridSearchCV", class_="section-sub")
+            ui.tags.h2("Modelling", class_="section-title"),
+            ui.p(
+                "Entrenamiento de modelos supervisados: clasificación y regresión lineal",
+                class_="section-sub"
+            )
         ),
 
         ui.div(
-            ui.div("CONFIGURACIÓN DEL MODELO DE CLASIFICACIÓN", class_="card-title"),
+            ui.div("CONFIGURACIÓN DEL MODELO", class_="card-title"),
+
+            ui.input_select(
+                "problem_type",
+                "Tipo de problema:",
+                choices={
+                    "classification": "Clasificación - Random Forest Classifier",
+                    "regression": "Regresión - Regresión Lineal"
+                },
+                selected="classification"
+            ),
+
+            ui.tags.br(),
 
             ui.input_select(
                 "target_col",
@@ -49,7 +74,7 @@ def render_model(df):
 
             ui.input_action_button(
                 "train_model",
-                "Entrenar modelo de clasificación",
+                "Entrenar modelo",
                 class_="btn btn-primary"
             ),
 
@@ -73,9 +98,17 @@ def render_model(df):
 
         ui.div(
             ui.div("SIMULADOR EN VIVO (TEST SET)", class_="card-title"),
-            ui.p("Toma un paciente aleatorio del conjunto de prueba (datos no vistos por el modelo) para validar su capacidad predictiva.", style="color: var(--muted);"),
-            ui.input_action_button("btn_random_predict", "Predicción Aleatoria", class_="btn btn-primary"),
-            ui.tags.br(), ui.tags.br(),
+            ui.p(
+                "Toma un registro aleatorio del conjunto de prueba para validar la predicción con datos no vistos por el modelo.",
+                style="color: var(--muted);"
+            ),
+            ui.input_action_button(
+                "btn_random_predict",
+                "Predicción aleatoria",
+                class_="btn btn-primary"
+            ),
+            ui.tags.br(),
+            ui.tags.br(),
             ui.output_ui("random_prediction_ui"),
             class_="card"
         )
@@ -83,7 +116,29 @@ def render_model(df):
 
 
 def register_model_handlers(input, output, df_current, add_log, encoding_state):
+    """Register modelling page handlers"""
+
     model_state = reactive.Value(None)
+    prediction_state = reactive.Value(None)
+
+    def decode_value(encoded_value, target_col, encodings, class_names=None):
+        """
+        Intenta decodificar valores codificados.
+        Sirve para targets que fueron transformados con Label/Binary Encoding.
+        """
+        value_str = str(encoded_value)
+
+        if class_names is not None:
+            try:
+                value_str = str(class_names[int(encoded_value)])
+            except Exception:
+                value_str = str(encoded_value)
+
+        if target_col in encodings:
+            reverse_map = {str(v): str(k) for k, v in encodings[target_col].items()}
+            return reverse_map.get(value_str, value_str)
+
+        return value_str
 
     @reactive.Effect
     def _update_feature_choices():
@@ -112,21 +167,33 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
             ui.notification_show("No hay dataset cargado.", type="error")
             return
 
+        problem_type = input.problem_type()
         target = input.target_col()
         features = list(input.feature_cols())
 
         if target in features:
             features.remove(target)
 
+        if not target:
+            ui.notification_show("Debe seleccionar una variable objetivo.", type="error")
+            return
+
         if not features:
             ui.notification_show("Debe seleccionar al menos una variable predictora.", type="error")
             return
 
+        if problem_type == "classification":
+            train_classification_model(df, target, features)
+        elif problem_type == "regression":
+            train_regression_model(df, target, features)
+
+    def train_classification_model(df, target, features):
+        """Train Random Forest Classifier with optional SMOTE and GridSearchCV"""
         try:
             start_time = time.time()
 
             with ui.Progress(min=0, max=100) as p:
-                p.set(5, message="🤖 Entrenando modelo... 5%", detail="Preparando datos")
+                p.set(5, message="🤖 Entrenando clasificación... 5%", detail="Preparando datos")
 
                 data = df[features + [target]].copy().dropna()
                 X = data[features].copy()
@@ -140,13 +207,22 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     )
                     return
 
-                p.set(20, message="🤖 Entrenando modelo... 20%", detail="Codificando variable objetivo")
+                if data.empty:
+                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
+                    return
+
+                p.set(20, message="🤖 Entrenando clasificación... 20%", detail="Codificando variable objetivo")
 
                 target_encoder = LabelEncoder()
                 y_encoded = target_encoder.fit_transform(y.astype(str))
                 class_names = list(target_encoder.classes_)
 
-                p.set(35, message="🤖 Entrenando modelo... 35%", detail="Dividiendo datos en train/test")
+                class_counts = pd.Series(y_encoded).value_counts()
+                if len(class_counts) < 2:
+                    ui.notification_show("La variable objetivo necesita al menos 2 clases.", type="error")
+                    return
+
+                p.set(35, message="🤖 Entrenando clasificación... 35%", detail="Dividiendo train/test")
 
                 X_train, X_test, y_train, y_test = train_test_split(
                     X,
@@ -156,22 +232,29 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     stratify=y_encoded
                 )
 
-                p.set(50, message="🤖 Entrenando modelo... 50%", detail="Aplicando SMOTE al conjunto de entrenamiento")
+                p.set(50, message="🤖 Entrenando clasificación... 50%", detail="Aplicando SMOTE si es posible")
 
-                smote = SMOTE(random_state=42)
-                X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+                train_class_counts = pd.Series(y_train).value_counts()
+                min_class_count = train_class_counts.min()
 
-                p.set(65, message="🤖 Entrenando modelo... 65%", detail="Ejecutando GridSearchCV. Esta etapa puede tardar varios minutos.")
+                if min_class_count >= 2:
+                    k_neighbors = min(5, min_class_count - 1)
+                    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
+                    X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+                    smote_applied = True
+                else:
+                    X_train_res, y_train_res = X_train, y_train
+                    smote_applied = False
+
+                p.set(65, message="🤖 Entrenando clasificación... 65%", detail="Ejecutando GridSearchCV")
 
                 rf = RandomForestClassifier(random_state=42)
 
                 param_grid = {
-                    "n_estimators": [300, 500],
-                    "max_depth": [10, 20, 30, None],
+                    "n_estimators": [200, 300],
+                    "max_depth": [10, 20, None],
                     "min_samples_split": [2, 5],
                     "min_samples_leaf": [1, 2],
-                    "max_features": ["sqrt", "log2"],
-                    "class_weight": ["balanced", "balanced_subsample"]
                 }
 
                 grid = GridSearchCV(
@@ -180,12 +263,12 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     scoring="f1_macro",
                     cv=5,
                     n_jobs=-1,
-                    verbose=2
+                    verbose=0
                 )
 
                 grid.fit(X_train_res, y_train_res)
 
-                p.set(85, message="🤖 Entrenando modelo... 85%", detail="Evaluando el mejor modelo")
+                p.set(85, message="🤖 Entrenando clasificación... 85%", detail="Evaluando modelo")
 
                 best_model = grid.best_estimator_
                 y_pred = best_model.predict(X_test)
@@ -218,13 +301,7 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                             [0.5, "rgba(0, 180, 160, 0.55)"],
                             [1.0, "rgba(0, 255, 200, 0.95)"]
                         ],
-                        colorbar=dict(
-                            title=dict(
-                                text="Casos",
-                                font=dict(color="white")
-                            ),
-                            tickfont=dict(color="white")
-                        )
+                        colorbar=dict(title=dict(text="Casos", font=dict(color="white")))
                     )
                 )
 
@@ -251,12 +328,14 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                 elapsed = int(time.time() - start_time)
 
                 model_state.set({
+                    "problem_type": "classification",
                     "target": target,
                     "features": features,
                     "n_rows": data.shape[0],
                     "train_rows": len(y_train),
                     "test_rows": len(y_test),
                     "smote_rows": len(y_train_res),
+                    "smote_applied": smote_applied,
                     "accuracy": accuracy,
                     "precision": precision,
                     "recall": recall,
@@ -272,14 +351,147 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                     "class_names": class_names,
                 })
 
-                p.set(100, message="✅ Modelo entrenado 100%", detail=f"Resultados listos | Tiempo total: {elapsed}s")
+                prediction_state.set(None)
 
-            add_log(f"Random Forest entrenado con GridSearchCV | F1 Macro: {f1:.4f}")
-            ui.notification_show("Modelo entrenado correctamente.", type="success")
+                p.set(100, message="✅ Clasificación entrenada 100%", detail=f"Tiempo total: {elapsed}s")
+
+            add_log(f"Random Forest Classifier entrenado | F1 Macro: {f1:.4f}")
+            ui.notification_show("Modelo de clasificación entrenado correctamente.", type="success")
 
         except Exception as e:
-            add_log(f"Error en modelado: {str(e)}")
-            ui.notification_show(f"Error al entrenar el modelo: {str(e)}", type="error")
+            add_log(f"Error en clasificación: {str(e)}")
+            ui.notification_show(f"Error al entrenar clasificación: {str(e)}", type="error")
+
+    def train_regression_model(df, target, features):
+        """Train Linear Regression model"""
+        try:
+            start_time = time.time()
+
+            with ui.Progress(min=0, max=100) as p:
+                p.set(10, message="📈 Entrenando regresión lineal... 10%", detail="Preparando datos")
+
+                data = df[features + [target]].copy().dropna()
+                X = data[features].copy()
+                y = data[target].copy()
+
+                cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+                if cat_features:
+                    ui.notification_show(
+                        f"Hay variables categóricas sin encoding: {cat_features}. Pase primero por Encoding.",
+                        type="error"
+                    )
+                    return
+
+                if not pd.api.types.is_numeric_dtype(y):
+                    ui.notification_show(
+                        "Para regresión, la variable objetivo debe ser numérica.",
+                        type="error"
+                    )
+                    return
+
+                if data.empty:
+                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
+                    return
+
+                p.set(35, message="📈 Entrenando regresión lineal... 35%", detail="Dividiendo train/test")
+
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X,
+                    y,
+                    test_size=0.2,
+                    random_state=42
+                )
+
+                p.set(60, message="📈 Entrenando regresión lineal... 60%", detail="Ajustando modelo")
+
+                model = LinearRegression()
+                model.fit(X_train, y_train)
+
+                p.set(80, message="📈 Entrenando regresión lineal... 80%", detail="Evaluando modelo")
+
+                y_pred = model.predict(X_test)
+
+                mae = mean_absolute_error(y_test, y_pred)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                r2 = r2_score(y_test, y_pred)
+
+                coef_df = pd.DataFrame({
+                    "Variable": features,
+                    "Coeficiente": model.coef_
+                }).sort_values(by="Coeficiente", ascending=False)
+
+                intercept = model.intercept_
+
+                fig = go.Figure()
+
+                fig.add_trace(go.Scatter(
+                    x=y_test,
+                    y=y_pred,
+                    mode="markers",
+                    name="Predicciones",
+                    marker=dict(size=7, opacity=0.7)
+                ))
+
+                min_val = min(float(np.min(y_test)), float(np.min(y_pred)))
+                max_val = max(float(np.max(y_test)), float(np.max(y_pred)))
+
+                fig.add_trace(go.Scatter(
+                    x=[min_val, max_val],
+                    y=[min_val, max_val],
+                    mode="lines",
+                    name="Predicción perfecta",
+                    line=dict(dash="dash")
+                ))
+
+                fig.update_layout(
+                    title="Valores reales vs predichos",
+                    xaxis_title="Valor real",
+                    yaxis_title="Valor predicho",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="white"),
+                    margin=dict(l=40, r=40, t=60, b=40),
+                    height=420
+                )
+
+                reg_plot_html = fig.to_html(
+                    full_html=False,
+                    include_plotlyjs=False,
+                    config={"displayModeBar": False}
+                )
+
+                elapsed = int(time.time() - start_time)
+
+                model_state.set({
+                    "problem_type": "regression",
+                    "target": target,
+                    "features": features,
+                    "n_rows": data.shape[0],
+                    "train_rows": len(y_train),
+                    "test_rows": len(y_test),
+                    "mae": mae,
+                    "rmse": rmse,
+                    "r2": r2,
+                    "coef_df": coef_df,
+                    "intercept": intercept,
+                    "reg_plot_html": reg_plot_html,
+                    "elapsed": elapsed,
+                    "best_model": model,
+                    "X_test": X_test,
+                    "y_test": y_test,
+                    "y_pred": y_pred,
+                })
+
+                prediction_state.set(None)
+
+                p.set(100, message="✅ Regresión lineal entrenada 100%", detail=f"Tiempo total: {elapsed}s")
+
+            add_log(f"Regresión Lineal entrenada | MAE: {mae:.4f} | RMSE: {rmse:.4f} | R²: {r2:.4f}")
+            ui.notification_show("Modelo de regresión lineal entrenado correctamente.", type="success")
+
+        except Exception as e:
+            add_log(f"Error en regresión lineal: {str(e)}")
+            ui.notification_show(f"Error al entrenar regresión lineal: {str(e)}", type="error")
 
     @output
     @render.ui
@@ -292,6 +504,15 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                 style="color: var(--muted);"
             )
 
+        if state["problem_type"] == "classification":
+            return render_classification_results(state)
+
+        if state["problem_type"] == "regression":
+            return render_regression_results(state)
+
+        return ui.div("Tipo de modelo no reconocido.")
+
+    def render_classification_results(state):
         metrics_html = f"""
         <div class="metric-grid">
             <div class="metric-card"><div class="metric-value">{state['accuracy']:.4f}</div><div class="metric-label">Accuracy</div></div>
@@ -331,15 +552,19 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                 </tr>
                 """
 
+        smote_text = "Sí" if state["smote_applied"] else "No"
+
         return ui.div(
             ui.HTML(metrics_html),
 
             ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
             ui.div(
+                ui.p(f"Tipo de modelo: Random Forest Classifier"),
                 ui.p(f"Variable objetivo: {state['target']}"),
                 ui.p(f"Registros usados: {state['n_rows']}"),
                 ui.p(f"Entrenamiento: {state['train_rows']} registros"),
                 ui.p(f"Prueba: {state['test_rows']} registros"),
+                ui.p(f"SMOTE aplicado: {smote_text}"),
                 ui.p(f"Entrenamiento luego de SMOTE: {state['smote_rows']} registros"),
                 ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
                 class_="model-info-box"
@@ -377,143 +602,196 @@ def register_model_handlers(input, output, df_current, add_log, encoding_state):
                 </table>
             """)
         )
-    
-    prediction_state = reactive.Value(None)
 
-    # 2. Lógica al presionar el botón "Predicción Aleatoria"
+    def render_regression_results(state):
+        metrics_html = f"""
+        <div class="metric-grid">
+            <div class="metric-card"><div class="metric-value">{state['mae']:.4f}</div><div class="metric-label">MAE</div></div>
+            <div class="metric-card"><div class="metric-value">{state['rmse']:.4f}</div><div class="metric-label">RMSE</div></div>
+            <div class="metric-card"><div class="metric-value">{state['r2']:.4f}</div><div class="metric-label">R²</div></div>
+        </div>
+        """
+
+        coef_rows = "".join(
+            f"<tr><td>{row['Variable']}</td><td>{row['Coeficiente']:.6f}</td></tr>"
+            for _, row in state["coef_df"].iterrows()
+        )
+
+        return ui.div(
+            ui.HTML(metrics_html),
+
+            ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
+            ui.div(
+                ui.p("Tipo de modelo: Regresión Lineal Múltiple"),
+                ui.p(f"Variable objetivo: {state['target']}"),
+                ui.p(f"Registros usados: {state['n_rows']}"),
+                ui.p(f"Entrenamiento: {state['train_rows']} registros"),
+                ui.p(f"Prueba: {state['test_rows']} registros"),
+                ui.p(f"Intercepto: {state['intercept']:.6f}"),
+                ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
+                class_="model-info-box"
+            ),
+
+            ui.tags.h4("Valores reales vs predichos", class_="model-subtitle"),
+            ui.HTML(state["reg_plot_html"]),
+
+            ui.tags.h4("Coeficientes del modelo", class_="model-subtitle"),
+            ui.HTML(f"""
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Variable</th>
+                            <th>Coeficiente</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {coef_rows}
+                    </tbody>
+                </table>
+            """),
+
+            ui.div(
+                ui.p(
+                    "Interpretación: un coeficiente positivo indica que, manteniendo las demás variables constantes, "
+                    "el aumento de esa variable se asocia con un incremento en la variable objetivo. "
+                    "Un coeficiente negativo indica una asociación inversa.",
+                    style="color: var(--muted); margin-top: 10px;"
+                ),
+                class_="model-info-box"
+            )
+        )
+
     @reactive.Effect
     @reactive.event(input.btn_random_predict)
     def _do_random_predict():
         state = model_state()
+
         if state is None or "best_model" not in state:
             ui.notification_show("Primero debes entrenar el modelo.", type="warning")
             return
-        
+
+        if state["problem_type"] == "classification":
+            random_classification_prediction(state)
+        elif state["problem_type"] == "regression":
+            random_regression_prediction(state)
+
+    def random_classification_prediction(state):
         X_test = state["X_test"]
         y_test = state["y_test"]
         best_model = state["best_model"]
-        target_col = input.target_col()
+        target_col = state["target"]
+        class_names = state["class_names"]
 
-        # Seleccionar un paciente aleatorio
         random_idx = random.randint(0, len(X_test) - 1)
-        
-        # Extraer la fila de datos (X)
         sample_X = X_test.iloc[[random_idx]]
-        
-        # Extraer el valor real (y). Manejo seguro por si y_test es Serie o Array
+
         true_y_encoded = y_test.iloc[random_idx] if isinstance(y_test, pd.Series) else y_test[random_idx]
-        
-        # Hacer la predicción con el modelo
         pred_encoded = best_model.predict(sample_X)[0]
         probs = best_model.predict_proba(sample_X)[0]
 
         encodings = encoding_state()
 
-        true_label_text = decode_value(int(true_y_encoded), target_col, encodings)
-        pred_label_text = decode_value(int(pred_encoded), target_col, encodings)
-        
+        true_label_text = decode_value(true_y_encoded, target_col, encodings, class_names)
+        pred_label_text = decode_value(pred_encoded, target_col, encodings, class_names)
+
         prediction_state.set({
+            "problem_type": "classification",
             "features_dict": sample_X.iloc[0].round(4).to_dict(),
             "true_label": true_label_text,
             "pred_label": pred_label_text,
             "confidence": round(max(probs) * 100, 2)
         })
 
+    def random_regression_prediction(state):
+        X_test = state["X_test"]
+        y_test = state["y_test"]
+        best_model = state["best_model"]
+
+        random_idx = random.randint(0, len(X_test) - 1)
+        sample_X = X_test.iloc[[random_idx]]
+
+        true_value = y_test.iloc[random_idx] if isinstance(y_test, pd.Series) else y_test[random_idx]
+        pred_value = best_model.predict(sample_X)[0]
+        abs_error = abs(true_value - pred_value)
+
+        prediction_state.set({
+            "problem_type": "regression",
+            "features_dict": sample_X.iloc[0].round(4).to_dict(),
+            "true_value": round(float(true_value), 4),
+            "pred_value": round(float(pred_value), 4),
+            "abs_error": round(float(abs_error), 4)
+        })
 
     @output
     @render.ui
     def random_prediction_ui():
         p_state = prediction_state()
+
         if p_state is None:
             return ui.div()
-            
+
+        if p_state["problem_type"] == "classification":
+            return render_random_classification_prediction(p_state)
+
+        if p_state["problem_type"] == "regression":
+            return render_random_regression_prediction(p_state)
+
+        return ui.div()
+
+    def render_random_classification_prediction(p_state):
         true_label = p_state["true_label"]
         pred_label = p_state["pred_label"]
-        
-        # Lógica exacta basada en las clases manuales
-        pred_str = str(pred_label).strip().lower()
+        confidence = p_state["confidence"]
 
-        # Lógica dinámica: Busca las palabras clave sin importar el número interno
-        if pred_label == "1" or "low" in pred_str:
-            bg_color = "#f0fdf4" 
-            border_color = "#22c55e" 
-            status_icon = f"✅ BAJO RIESGO ({pred_label})"
-            accion_clinica = "Paciente pediátrico fuera de peligro inmediato. Mantener controles de rutina y nutrición en las instalaciones de ALDIMI."
-            
-        elif pred_label == "2" or "medium" in pred_str:
-            bg_color = "#fffbeb" 
-            border_color = "#f59e0b" 
-            status_icon = f"⚠️ RIESGO MODERADO ({pred_label})"
-            accion_clinica = "El paciente requiere entrar en observación preventiva. Programar una consulta con endocrinología pediátrica en el corto plazo."
-            
-        elif pred_label == "0" or "high" in pred_str:
-            bg_color = "#fef2f2" 
-            border_color = "#ef4444" 
-            status_icon = f"🚨 ALERTA CRÍTICA: ALTO RIESGO ({pred_label})"
-            accion_clinica = "Derivación hospitalaria urgente. Iniciar protocolo de traslado a centro oncológico pediátrico para atención prioritaria."
+        is_correct = str(true_label) == str(pred_label)
+        status_text = "Correcto" if is_correct else "Incorrecto"
+        status_color = "var(--accent)" if is_correct else "var(--accent2)"
 
-        else:
-            # Fallback dinámico para CUALQUIER otro dataset que entrenen
-            bg_color = "#f3f4f6"
-            border_color = "#9ca3af"
-            status_icon = f"ℹ️ CLASIFICACIÓN: {pred_label.upper()}"
-            accion_clinica = "Resultado de clasificación genérica. Aplicar protocolo estándar según la clase obtenida."
-
-        # Identificador visual si el modelo acertó o se equivocó (True Positive vs False Positive/Negative)
-        match_icon = "🎯 ACIERTO DEL MODELO" if true_label == pred_label else "❌ FALLO DE PREDICCIÓN"
-        match_color = "#16a34a" if true_label == pred_label else "#dc2626"
-
-        # Crear la lista de variables para mostrar qué evaluó el modelo
-        features_html = "".join(
-            f"<li><b>{k}</b>: {v}</li>" for k, v in p_state["features_dict"].items()
+        feature_rows = "".join(
+            f"<tr><td>{k}</td><td>{v}</td></tr>"
+            for k, v in p_state["features_dict"].items()
         )
 
         return ui.HTML(f"""
-            <div style="display: flex; gap: 20px;">
-                <div style="flex: 1; padding: 15px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
-                    <h4 style="margin-top: 0; color: var(--muted); display: flex; justify-content: space-between;">
-                        <span>Biomarcadores Evaluados</span>
-                        <span style="color: {match_color}; font-size: 0.8em; border: 1px solid {match_color}; padding: 2px 6px; border-radius: 4px;">
-                            {match_icon} (Real: {true_label})
-                        </span>
-                    </h4>
-                    <ul style="font-size: 0.9em; column-count: 2; list-style-type: none; padding-left: 0;">
-                        {features_html}
-                    </ul>
-                </div>
-                
-                <div style="flex: 1; padding: 15px; background: {bg_color}; border-radius: 8px; border-left: 6px solid {border_color};">
-                    <h4 style="margin-top: 0; color: {border_color}; font-size: 1.2em;">{status_icon}</h4>
-                    <p style="margin-bottom: 8px;">
-                        <strong>Confianza del Algoritmo:</strong> <span style="font-size: 1.1em;">{p_state['confidence']}%</span>
-                    </p>
-                    <hr style="border-top: 1px solid {border_color}; opacity: 0.3; margin: 10px 0;">
-                    <p style="margin-bottom: 0; font-size: 1.05em; line-height: 1.4;">
-                        <strong>Protocolo ALDIMI:</strong><br>
-                        {accion_clinica}
-                    </p>
-                </div>
+            <div class="model-info-box">
+                <h4 style="color:{status_color};">Resultado: {status_text}</h4>
+                <p><b>Valor real:</b> {true_label}</p>
+                <p><b>Predicción:</b> {pred_label}</p>
+                <p><b>Confianza:</b> {confidence}%</p>
             </div>
-        """)
-    
-def decode_value(encoded_val, col_name, encodings):
 
-    if col_name not in encodings:
-        return str(encoded_val)  # fallback
-    
-    mapping = encodings[col_name]
-    
-    # Caso Label/Binary
-    if isinstance(mapping, dict):
-        inv_map = {v: k for k, v in mapping.items()}
-        return inv_map.get(encoded_val, str(encoded_val))
-    
-    # Caso One-Hot (lista de columnas dummy)
-    elif isinstance(mapping, list):
-        # reconstruir categoría original
-        for dummy_col in mapping:
-            if encoded_val.get(dummy_col, 0) == 1:
-                return dummy_col.replace("_encoded", "").replace(f"{col_name}_", "")
-        return str(encoded_val)
-    
-    return str(encoded_val)
+            <h4 class="model-subtitle">Variables del registro evaluado</h4>
+            <table class="data-table">
+                <thead>
+                    <tr><th>Variable</th><th>Valor</th></tr>
+                </thead>
+                <tbody>
+                    {feature_rows}
+                </tbody>
+            </table>
+        """)
+
+    def render_random_regression_prediction(p_state):
+        feature_rows = "".join(
+            f"<tr><td>{k}</td><td>{v}</td></tr>"
+            for k, v in p_state["features_dict"].items()
+        )
+
+        return ui.HTML(f"""
+            <div class="model-info-box">
+                <h4 style="color:var(--accent);">Predicción de regresión lineal</h4>
+                <p><b>Valor real:</b> {p_state['true_value']}</p>
+                <p><b>Valor predicho:</b> {p_state['pred_value']}</p>
+                <p><b>Error absoluto:</b> {p_state['abs_error']}</p>
+            </div>
+
+            <h4 class="model-subtitle">Variables del registro evaluado</h4>
+            <table class="data-table">
+                <thead>
+                    <tr><th>Variable</th><th>Valor</th></tr>
+                </thead>
+                <tbody>
+                    {feature_rows}
+                </tbody>
+            </table>
+        """)
