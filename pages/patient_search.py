@@ -102,7 +102,7 @@ def render_patient_search(df):
     )
 
 
-def register_patient_search_handlers(input, output, df_current):
+def register_patient_search_handlers(input,output,df_original,df_processed,classification_model_state):
     """Register patient search handlers"""
 
     selected_patient_code = reactive.Value(None)
@@ -212,7 +212,7 @@ def register_patient_search_handlers(input, output, df_current):
     @output
     @render.ui
     def patient_search_results():
-        df = df_current()
+        df = df_original()
 
         if df is None:
             return ui.div()
@@ -320,7 +320,7 @@ def register_patient_search_handlers(input, output, df_current):
     @output
     @render.ui
     def patient_detail():
-        df = df_current()
+        df = df_original()
 
         if df is None:
             return ui.div()
@@ -350,9 +350,76 @@ def register_patient_search_handlers(input, output, df_current):
         ethnicity = safe_get(row, "Ethnicity")
         assigned_program = safe_get(row, "assigned_program")
         contact_priority = safe_get(row, "contact_priority")
-        risk = safe_get(row, "Thyroid_Cancer_Risk")
+        registered_risk = safe_get(row, "Thyroid_Cancer_Risk")
         diagnosis = safe_get(row, "Diagnosis")
 
+        # ── Predicción con modelo entrenado ─────────────────────────────
+        model_info = classification_model_state()
+        processed_df = df_processed()
+
+        prediction_available = False
+        prediction_error = None
+        predicted_risk = None
+
+        if model_info is not None and processed_df is not None:
+            try:
+                model = model_info.get("best_model")
+                features = model_info.get("features", [])
+                class_names = model_info.get("class_names", [])
+
+                if "patient_code" not in processed_df.columns:
+                    prediction_error = "El dataset procesado no conserva patient_code."
+                else:
+                    processed_patient = processed_df[
+                        processed_df["patient_code"].astype(str) == str(patient_code)
+                    ]
+
+                    if processed_patient.empty:
+                        prediction_error = "No se encontró este paciente en el dataset procesado."
+                    else:
+                        missing_features = [
+                            feature for feature in features
+                            if feature not in processed_patient.columns
+                        ]
+
+                        if missing_features:
+                            prediction_error = f"Faltan features procesadas: {missing_features}"
+                        else:
+                            sample_X = processed_patient[features].iloc[[0]].copy()
+
+                            cat_cols = sample_X.select_dtypes(include=["object", "category"]).columns.tolist()
+
+                            if cat_cols:
+                                prediction_error = f"Hay variables sin encoding: {cat_cols}"
+                            elif sample_X.isnull().any().any():
+                                prediction_error = "La fila procesada contiene valores nulos."
+                            else:
+                                pred_encoded = model.predict(sample_X)[0]
+
+                                try:
+                                    predicted_risk = class_names[int(pred_encoded)]
+                                except Exception:
+                                    predicted_risk = str(pred_encoded)
+                                
+                                encodings = model_info.get("encoding_state", {})
+                                target_col = model_info.get("target", "Thyroid_Cancer_Risk")
+
+                                if target_col in encodings:
+                                    reverse_mapping = {
+                                        str(v): str(k)
+                                        for k, v in encodings[target_col].items()
+                                    }
+                                    predicted_risk = reverse_mapping.get(str(predicted_risk), str(predicted_risk))
+                                prediction_available = True
+
+            except Exception as exc:
+                prediction_error = str(exc)
+        else:
+            prediction_error = "Aún no hay modelo de clasificación entrenado."
+
+        
+
+        risk = predicted_risk if prediction_available else registered_risk
         recommendation = recommendation_text(risk, diagnosis, contact_priority)
         urgent_class = "urgent" if str(contact_priority).strip() == "URGENTE" else ""
 
@@ -388,14 +455,39 @@ def register_patient_search_handlers(input, output, df_current):
             + info_row("Grupo étnico", ethnicity)
         )
 
+        if prediction_available:
+            model_status_html = (
+                "<span class='pill' style='background:var(--accent);color:#fff'>"
+                "Predicción generada"
+                "</span>"
+            )
+        else:
+            model_status_html = (
+                "<span class='pill' style='background:var(--warn);color:#000'>"
+                "Usando dato registrado"
+                "</span>"
+            )
+
         clinical_priority_html = (
-            info_row("Riesgo estimado", risk_badge(risk), html_value=True)
+            info_row("Estado del modelo", model_status_html, html_value=True)
+            + info_row("Riesgo predicho por modelo", risk_badge(risk), html_value=True)
+            + info_row("Riesgo registrado", risk_badge(registered_risk), html_value=True)
             + info_row("Diagnóstico", diagnosis_badge(diagnosis), html_value=True)
             + info_row("Prioridad de contacto", priority_badge(contact_priority), html_value=True)
             + info_row("Programa asignado", assigned_program)
         )
 
+        prediction_notice = ""
+
+        if not prediction_available and prediction_error:
+            prediction_notice = f"""
+            <div class="recommendation-box">
+                <b>Nota del modelo:</b> {escape(str(prediction_error))}
+            </div>
+            <br>
+            """
         return ui.HTML(f"""
+        {prediction_notice}
         <div class="detail-grid">
             <div class="sub-card-clean">
                 <div class="section-block-title">Datos básicos</div>

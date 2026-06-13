@@ -263,7 +263,7 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
                     scoring="f1_macro",
                     cv=5,
                     n_jobs=-1,
-                    verbose=True
+                    verbose=0
                 )
 
                 grid.fit(X_train_res, y_train_res)
