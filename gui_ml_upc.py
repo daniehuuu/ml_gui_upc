@@ -32,6 +32,8 @@ from pages import (
     register_export_handlers,
     render_model,
     register_model_handlers,
+    render_patient_search,
+    register_patient_search_handlers,
     render_docs,
 )
 
@@ -220,6 +222,10 @@ def server(input, output, session):
     def _(): current_page.set("overview")
 
     @reactive.Effect
+    @reactive.event(input.nav_patient_search)
+    def _(): current_page.set("patient_search")
+
+    @reactive.Effect
     @reactive.event(input.nav_eda)
     def _(): current_page.set("eda")
 
@@ -368,6 +374,7 @@ def server(input, output, session):
     register_outlier_handlers(input, output, df_current, add_log)
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
     register_model_handlers(input, output, df_current, add_log, encoding_state)
+    register_patient_search_handlers(input, output, df_current)
     register_export_handlers(input, output, df_current)
 
     # ─────────────────────────────────────────────────────────────
@@ -380,6 +387,8 @@ def server(input, output, session):
         df = df_current()
         if page == "overview":
             return render_overview(df, load_config, dtype_manual_state)
+        elif page == "patient_search":
+            return render_patient_search(df)
         elif page == "eda":
             return render_eda(df)
         elif page == "missing":
