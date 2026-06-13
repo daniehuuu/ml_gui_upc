@@ -14,6 +14,7 @@ def sidebar_nav_ui(current_page):
     return ui.div(
         nav_button("nav_overview", "📊", "Overview", "overview"),
         nav_button("nav_patient_search", "🔎", "Consulta Paciente", "patient_search"),
+        nav_button("nav_resource_availability", "📦", "Disponibilidad Recursos", "resource_availability"),
         nav_button("nav_eda", "📈", "EDA", "eda"),
         nav_button("nav_missing", "🔍", "Missing Values", "missing"),
         nav_button("nav_outlier", "🎯", "Outliers", "outlier"),

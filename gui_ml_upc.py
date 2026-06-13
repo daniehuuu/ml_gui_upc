@@ -34,6 +34,8 @@ from pages import (
     register_model_handlers,
     render_patient_search,
     register_patient_search_handlers,
+    render_resource_availability,
+    register_resource_availability_handlers,
     render_docs,
 )
 
@@ -230,6 +232,11 @@ def server(input, output, session):
     def _(): current_page.set("patient_search")
 
     @reactive.Effect
+    @reactive.event(input.nav_resource_availability)
+    def _():
+        current_page.set("resource_availability")
+
+    @reactive.Effect
     @reactive.event(input.nav_eda)
     def _(): current_page.set("eda")
 
@@ -379,6 +386,7 @@ def server(input, output, session):
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
     register_model_handlers(input,output,df_current,add_log,encoding_state,classification_model_state,regression_model_state)    
     register_patient_search_handlers(input,output,df_original,df_current,classification_model_state)
+    register_resource_availability_handlers(input,output,df_original,df_current,regression_model_state)
     register_export_handlers(input, output, df_current)
 
     # ─────────────────────────────────────────────────────────────
@@ -393,6 +401,8 @@ def server(input, output, session):
             return render_overview(df, load_config, dtype_manual_state)
         elif page == "patient_search":
             return render_patient_search(df_original())
+        elif page == "resource_availability":
+            return render_resource_availability(df_original())
         elif page == "eda":
             return render_eda(df)
         elif page == "missing":

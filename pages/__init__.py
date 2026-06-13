@@ -9,6 +9,7 @@ from .outlier import render_outlier, register_outlier_handlers
 from .drop import render_drop, register_drop_handlers
 from .model import render_model, register_model_handlers
 from .patient_search import render_patient_search, register_patient_search_handlers
+from .resource_availability import render_resource_availability, register_resource_availability_handlers
 from .export import render_export, register_export_handlers
 from .docs import render_docs
 
@@ -28,6 +29,8 @@ __all__ = [
     "register_drop_handlers",
     "render_patient_search",
     "register_patient_search_handlers",
+    "render_resource_availability",
+    "register_resource_availability_handlers",
     "render_model",
     "register_model_handlers",
     "render_export",
