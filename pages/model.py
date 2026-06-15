@@ -1,4 +1,4 @@
-"""Modelling page: Classification + Linear Regression"""
+"""Modelling page: Classification + Linear Regression + Cross Validation"""
 from shiny import ui, render, reactive
 from app_helpers import get_num_cols
 
@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold, cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import (
@@ -37,7 +37,7 @@ def render_model(df):
         ui.div(
             ui.tags.h2("Modelling", class_="section-title"),
             ui.p(
-                "Entrenamiento de modelos supervisados: clasificación y regresión lineal",
+                "Entrenamiento de modelos supervisados con evaluación robusta mediante validación cruzada.",
                 class_="section-sub"
             )
         ),
@@ -115,7 +115,15 @@ def render_model(df):
     )
 
 
-def register_model_handlers(input,output,df_current,add_log,encoding_state,classification_model_state,regression_model_state):
+def register_model_handlers(
+    input,
+    output,
+    df_current,
+    add_log,
+    encoding_state,
+    classification_model_state,
+    regression_model_state
+):
     """Register modelling page handlers"""
 
     model_state = reactive.Value(None)
@@ -246,7 +254,7 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
                     X_train_res, y_train_res = X_train, y_train
                     smote_applied = False
 
-                p.set(65, message="🤖 Entrenando clasificación... 65%", detail="Ejecutando GridSearchCV")
+                p.set(65, message="🤖 Entrenando clasificación... 65%", detail="Ejecutando GridSearchCV con 5-fold CV")
 
                 rf = RandomForestClassifier(random_state=42)
 
@@ -268,7 +276,10 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
 
                 grid.fit(X_train_res, y_train_res)
 
-                p.set(85, message="🤖 Entrenando clasificación... 85%", detail="Evaluando modelo")
+                cv_f1_mean = grid.best_score_
+                cv_f1_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+                p.set(85, message="🤖 Entrenando clasificación... 85%", detail="Evaluando modelo en test set")
 
                 best_model = grid.best_estimator_
                 y_pred = best_model.predict(X_test)
@@ -336,10 +347,15 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
                     "test_rows": len(y_test),
                     "smote_rows": len(y_train_res),
                     "smote_applied": smote_applied,
+
                     "accuracy": accuracy,
                     "precision": precision,
                     "recall": recall,
                     "f1": f1,
+
+                    "cv_f1_mean": cv_f1_mean,
+                    "cv_f1_std": cv_f1_std,
+
                     "best_params": grid.best_params_,
                     "report_dict": report_dict,
                     "cm_html": cm_html,
@@ -368,7 +384,10 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
 
                 p.set(100, message="✅ Clasificación entrenada 100%", detail=f"Tiempo total: {elapsed}s")
 
-            add_log(f"Random Forest Classifier entrenado | F1 Macro: {f1:.4f}")
+            add_log(
+                f"Random Forest Classifier entrenado | "
+                f"F1 Test: {f1:.4f} | CV F1 Macro: {cv_f1_mean:.4f} ± {cv_f1_std:.4f}"
+            )
             ui.notification_show("Modelo de clasificación entrenado correctamente.", type="success")
 
         except Exception as e:
@@ -376,7 +395,7 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
             ui.notification_show(f"Error al entrenar clasificación: {str(e)}", type="error")
 
     def train_regression_model(df, target, features):
-        """Train Linear Regression model"""
+        """Train Linear Regression model with KFold cross validation"""
         try:
             start_time = time.time()
 
@@ -415,12 +434,37 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
                     random_state=42
                 )
 
-                p.set(60, message="📈 Entrenando regresión lineal... 60%", detail="Ajustando modelo")
+                p.set(55, message="📈 Entrenando regresión lineal... 55%", detail="Ajustando modelo")
 
                 model = LinearRegression()
                 model.fit(X_train, y_train)
 
-                p.set(80, message="📈 Entrenando regresión lineal... 80%", detail="Evaluando modelo")
+                p.set(70, message="📈 Entrenando regresión lineal... 70%", detail="Ejecutando 5-fold Cross Validation")
+
+                cv = KFold(n_splits=5, shuffle=True, random_state=42)
+
+                cv_rmse_scores = -cross_val_score(
+                    model,
+                    X,
+                    y,
+                    cv=cv,
+                    scoring="neg_root_mean_squared_error"
+                )
+
+                cv_r2_scores = cross_val_score(
+                    model,
+                    X,
+                    y,
+                    cv=cv,
+                    scoring="r2"
+                )
+
+                cv_rmse_mean = cv_rmse_scores.mean()
+                cv_rmse_std = cv_rmse_scores.std()
+                cv_r2_mean = cv_r2_scores.mean()
+                cv_r2_std = cv_r2_scores.std()
+
+                p.set(85, message="📈 Entrenando regresión lineal... 85%", detail="Evaluando modelo en test set")
 
                 y_pred = model.predict(X_test)
 
@@ -482,9 +526,16 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
                     "n_rows": data.shape[0],
                     "train_rows": len(y_train),
                     "test_rows": len(y_test),
+
                     "mae": mae,
                     "rmse": rmse,
                     "r2": r2,
+
+                    "cv_rmse_mean": cv_rmse_mean,
+                    "cv_rmse_std": cv_rmse_std,
+                    "cv_r2_mean": cv_r2_mean,
+                    "cv_r2_std": cv_r2_std,
+
                     "coef_df": coef_df,
                     "intercept": intercept,
                     "reg_plot_html": reg_plot_html,
@@ -507,7 +558,11 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
 
                 p.set(100, message="✅ Regresión lineal entrenada 100%", detail=f"Tiempo total: {elapsed}s")
 
-            add_log(f"Regresión Lineal entrenada | MAE: {mae:.4f} | RMSE: {rmse:.4f} | R²: {r2:.4f}")
+            add_log(
+                f"Regresión Lineal entrenada | "
+                f"RMSE Test: {rmse:.4f} | CV RMSE: {cv_rmse_mean:.4f} ± {cv_rmse_std:.4f} | "
+                f"CV R²: {cv_r2_mean:.4f} ± {cv_r2_std:.4f}"
+            )
             ui.notification_show("Modelo de regresión lineal entrenado correctamente.", type="success")
 
         except Exception as e:
@@ -536,10 +591,26 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
     def render_classification_results(state):
         metrics_html = f"""
         <div class="metric-grid">
-            <div class="metric-card"><div class="metric-value">{state['accuracy']:.4f}</div><div class="metric-label">Accuracy</div></div>
-            <div class="metric-card"><div class="metric-value">{state['precision']:.4f}</div><div class="metric-label">Precision Macro</div></div>
-            <div class="metric-card"><div class="metric-value">{state['recall']:.4f}</div><div class="metric-label">Recall Macro</div></div>
-            <div class="metric-card"><div class="metric-value">{state['f1']:.4f}</div><div class="metric-label">F1 Macro</div></div>
+            <div class="metric-card">
+                <div class="metric-value">{state['accuracy']:.4f}</div>
+                <div class="metric-label">Accuracy Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['precision']:.4f}</div>
+                <div class="metric-label">Precision Macro</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['recall']:.4f}</div>
+                <div class="metric-label">Recall Macro</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['f1']:.4f}</div>
+                <div class="metric-label">F1 Macro Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['cv_f1_mean']:.4f}</div>
+                <div class="metric-label">CV F1 Macro</div>
+            </div>
         </div>
         """
 
@@ -580,13 +651,15 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
 
             ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
             ui.div(
-                ui.p(f"Tipo de modelo: Random Forest Classifier"),
+                ui.p("Tipo de modelo: Random Forest Classifier"),
                 ui.p(f"Variable objetivo: {state['target']}"),
                 ui.p(f"Registros usados: {state['n_rows']}"),
                 ui.p(f"Entrenamiento: {state['train_rows']} registros"),
                 ui.p(f"Prueba: {state['test_rows']} registros"),
                 ui.p(f"SMOTE aplicado: {smote_text}"),
                 ui.p(f"Entrenamiento luego de SMOTE: {state['smote_rows']} registros"),
+                ui.p("Validación cruzada: 5-fold CV mediante GridSearchCV"),
+                ui.p(f"CV F1 Macro promedio: {state['cv_f1_mean']:.4f} ± {state['cv_f1_std']:.4f}"),
                 ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
                 class_="model-info-box"
             ),
@@ -627,9 +700,26 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
     def render_regression_results(state):
         metrics_html = f"""
         <div class="metric-grid">
-            <div class="metric-card"><div class="metric-value">{state['mae']:.4f}</div><div class="metric-label">MAE</div></div>
-            <div class="metric-card"><div class="metric-value">{state['rmse']:.4f}</div><div class="metric-label">RMSE</div></div>
-            <div class="metric-card"><div class="metric-value">{state['r2']:.4f}</div><div class="metric-label">R²</div></div>
+            <div class="metric-card">
+                <div class="metric-value">{state['mae']:.4f}</div>
+                <div class="metric-label">MAE Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['rmse']:.4f}</div>
+                <div class="metric-label">RMSE Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['r2']:.4f}</div>
+                <div class="metric-label">R² Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['cv_rmse_mean']:.4f}</div>
+                <div class="metric-label">CV RMSE</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['cv_r2_mean']:.4f}</div>
+                <div class="metric-label">CV R²</div>
+            </div>
         </div>
         """
 
@@ -648,6 +738,9 @@ def register_model_handlers(input,output,df_current,add_log,encoding_state,class
                 ui.p(f"Registros usados: {state['n_rows']}"),
                 ui.p(f"Entrenamiento: {state['train_rows']} registros"),
                 ui.p(f"Prueba: {state['test_rows']} registros"),
+                ui.p("Validación cruzada: 5-fold CV con KFold"),
+                ui.p(f"CV RMSE promedio: {state['cv_rmse_mean']:.4f} ± {state['cv_rmse_std']:.4f}"),
+                ui.p(f"CV R² promedio: {state['cv_r2_mean']:.4f} ± {state['cv_r2_std']:.4f}"),
                 ui.p(f"Intercepto: {state['intercept']:.6f}"),
                 ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
                 class_="model-info-box"
