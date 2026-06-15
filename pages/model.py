@@ -1,4 +1,4 @@
-"""Modelling page: Classification + Linear Regression + Cross Validation"""
+"""Modelling page: Classification + Tuned Support Vector Regression + Cross Validation"""
 from shiny import ui, render, reactive
 from app_helpers import get_num_cols
 
@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 
 from sklearn.model_selection import train_test_split, GridSearchCV, KFold, cross_val_score
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LinearRegression
+from sklearn.svm import SVR
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -37,7 +37,7 @@ def render_model(df):
         ui.div(
             ui.tags.h2("Modelling", class_="section-title"),
             ui.p(
-                "Entrenamiento de modelos supervisados con evaluación robusta mediante validación cruzada.",
+                "Entrenamiento de modelos supervisados con ajuste de hiperparámetros y validación cruzada.",
                 class_="section-sub"
             )
         ),
@@ -50,7 +50,7 @@ def render_model(df):
                 "Tipo de problema:",
                 choices={
                     "classification": "Clasificación - Random Forest Classifier",
-                    "regression": "Regresión - Regresión Lineal"
+                    "regression": "Regresión - Support Vector Regression"
                 },
                 selected="classification"
             ),
@@ -192,8 +192,9 @@ def register_model_handlers(
 
         if problem_type == "classification":
             train_classification_model(df, target, features)
+
         elif problem_type == "regression":
-            train_regression_model(df, target, features)
+            train_svr_model(df, target, features)
 
     def train_classification_model(df, target, features):
         """Train Random Forest Classifier with optional SMOTE and GridSearchCV"""
@@ -204,6 +205,11 @@ def register_model_handlers(
                 p.set(5, message="🤖 Entrenando clasificación... 5%", detail="Preparando datos")
 
                 data = df[features + [target]].copy().dropna()
+
+                if data.empty:
+                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
+                    return
+
                 X = data[features].copy()
                 y = data[target].copy()
 
@@ -214,11 +220,7 @@ def register_model_handlers(
                         type="error"
                     )
                     return
-
-                if data.empty:
-                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
-                    return
-
+                
                 p.set(20, message="🤖 Entrenando clasificación... 20%", detail="Codificando variable objetivo")
 
                 target_encoder = LabelEncoder()
@@ -254,7 +256,11 @@ def register_model_handlers(
                     X_train_res, y_train_res = X_train, y_train
                     smote_applied = False
 
-                p.set(65, message="🤖 Entrenando clasificación... 65%", detail="Ejecutando GridSearchCV con 5-fold CV")
+                p.set(
+                    65,
+                    message="🤖 Entrenando clasificación... 65%",
+                    detail="Ejecutando GridSearchCV con 5-fold CV"
+                )
 
                 rf = RandomForestClassifier(random_state=42)
 
@@ -394,15 +400,20 @@ def register_model_handlers(
             add_log(f"Error en clasificación: {str(e)}")
             ui.notification_show(f"Error al entrenar clasificación: {str(e)}", type="error")
 
-    def train_regression_model(df, target, features):
-        """Train Linear Regression model with KFold cross validation"""
+    def train_svr_model(df, target, features):
+        """Train Support Vector Regression with GridSearchCV tuning"""
         try:
             start_time = time.time()
 
             with ui.Progress(min=0, max=100) as p:
-                p.set(10, message="📈 Entrenando regresión lineal... 10%", detail="Preparando datos")
+                p.set(10, message="📈 Entrenando SVR... 10%", detail="Preparando datos")
 
                 data = df[features + [target]].copy().dropna()
+
+                if data.empty:
+                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
+                    return
+
                 X = data[features].copy()
                 y = data[target].copy()
 
@@ -421,11 +432,7 @@ def register_model_handlers(
                     )
                     return
 
-                if data.empty:
-                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
-                    return
-
-                p.set(35, message="📈 Entrenando regresión lineal... 35%", detail="Dividiendo train/test")
+                p.set(25, message="📈 Entrenando SVR... 25%", detail="Dividiendo train/test")
 
                 X_train, X_test, y_train, y_test = train_test_split(
                     X,
@@ -434,50 +441,87 @@ def register_model_handlers(
                     random_state=42
                 )
 
-                p.set(55, message="📈 Entrenando regresión lineal... 55%", detail="Ajustando modelo")
+                p.set(40, message="📈 Entrenando SVR... 40%", detail="Preparando muestra para tuning")
 
-                model = LinearRegression()
-                model.fit(X_train, y_train)
+                # SVR con kernel RBF puede ser pesado en datasets grandes.
+                # Para evitar que la app se congele, GridSearchCV se ejecuta sobre una muestra.
+                max_tuning_rows = 6000
 
-                p.set(70, message="📈 Entrenando regresión lineal... 70%", detail="Ejecutando 5-fold Cross Validation")
+                if len(X_train) > max_tuning_rows:
+                    X_tune = X_train.sample(
+                        n=max_tuning_rows,
+                        random_state=42
+                    )
+                    y_tune = y_train.loc[X_tune.index]
+                    tuning_sample_used = True
+                else:
+                    X_tune = X_train
+                    y_tune = y_train
+                    tuning_sample_used = False
 
-                cv = KFold(n_splits=5, shuffle=True, random_state=42)
+                p.set(55, message="📈 Entrenando SVR... 55%", detail="Ejecutando GridSearchCV")
 
-                cv_rmse_scores = -cross_val_score(
-                    model,
-                    X,
-                    y,
-                    cv=cv,
-                    scoring="neg_root_mean_squared_error"
+                svr = SVR(cache_size=1000)
+
+                param_grid = {
+                    "kernel": ["rbf"],
+                    "C": [1, 10],
+                    "epsilon": [0.1, 1],
+                    "gamma": ["scale"],
+                }
+
+                grid = GridSearchCV(
+                    estimator=svr,
+                    param_grid=param_grid,
+                    scoring="neg_root_mean_squared_error",
+                    cv=3,
+                    n_jobs=-1,
+                    verbose=0
                 )
+
+                grid.fit(X_tune, y_tune)
+
+                best_params = grid.best_params_
+                cv_rmse_mean = -grid.best_score_
+                cv_rmse_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+                p.set(70, message="📈 Entrenando SVR... 70%", detail="Calculando CV R²")
+
+                best_model_for_cv = SVR(
+                    **best_params,
+                    cache_size=1000
+                )
+
+                cv = KFold(n_splits=3, shuffle=True, random_state=42)
 
                 cv_r2_scores = cross_val_score(
-                    model,
-                    X,
-                    y,
+                    best_model_for_cv,
+                    X_tune,
+                    y_tune,
                     cv=cv,
-                    scoring="r2"
+                    scoring="r2",
+                    n_jobs=-1
                 )
-
-                cv_rmse_mean = cv_rmse_scores.mean()
-                cv_rmse_std = cv_rmse_scores.std()
+                
                 cv_r2_mean = cv_r2_scores.mean()
                 cv_r2_std = cv_r2_scores.std()
 
-                p.set(85, message="📈 Entrenando regresión lineal... 85%", detail="Evaluando modelo en test set")
+                p.set(82, message="📈 Entrenando SVR... 82%", detail="Entrenando mejor modelo con train completo")
 
-                y_pred = model.predict(X_test)
+                best_model = SVR(
+                    **best_params,
+                    cache_size=1000
+                )
+
+                best_model.fit(X_train, y_train)
+
+                p.set(90, message="📈 Entrenando SVR... 90%", detail="Evaluando modelo en test set")
+
+                y_pred = best_model.predict(X_test)
 
                 mae = mean_absolute_error(y_test, y_pred)
                 rmse = np.sqrt(mean_squared_error(y_test, y_pred))
                 r2 = r2_score(y_test, y_pred)
-
-                coef_df = pd.DataFrame({
-                    "Variable": features,
-                    "Coeficiente": model.coef_
-                }).sort_values(by="Coeficiente", ascending=False)
-
-                intercept = model.intercept_
 
                 fig = go.Figure()
 
@@ -517,6 +561,11 @@ def register_model_handlers(
                     config={"displayModeBar": False}
                 )
 
+                params_df = pd.DataFrame({
+                    "Parámetro": list(best_params.keys()),
+                    "Valor": [str(v) for v in best_params.values()]
+                })
+
                 elapsed = int(time.time() - start_time)
 
                 model_state.set({
@@ -536,11 +585,14 @@ def register_model_handlers(
                     "cv_r2_mean": cv_r2_mean,
                     "cv_r2_std": cv_r2_std,
 
-                    "coef_df": coef_df,
-                    "intercept": intercept,
+                    "best_params": best_params,
+                    "params_df": params_df,
+                    "tuning_rows": len(X_tune),
+                    "tuning_sample_used": tuning_sample_used,
+
                     "reg_plot_html": reg_plot_html,
                     "elapsed": elapsed,
-                    "best_model": model,
+                    "best_model": best_model,
                     "X_test": X_test,
                     "y_test": y_test,
                     "y_pred": y_pred,
@@ -550,24 +602,25 @@ def register_model_handlers(
                     "problem_type": "regression",
                     "target": target,
                     "features": features,
-                    "best_model": model,
+                    "best_model": best_model,
                     "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 })
 
                 prediction_state.set(None)
 
-                p.set(100, message="✅ Regresión lineal entrenada 100%", detail=f"Tiempo total: {elapsed}s")
+                p.set(100, message="✅ SVR entrenado 100%", detail=f"Tiempo total: {elapsed}s")
 
             add_log(
-                f"Regresión Lineal entrenada | "
+                f"Support Vector Regression entrenado con GridSearchCV | "
                 f"RMSE Test: {rmse:.4f} | CV RMSE: {cv_rmse_mean:.4f} ± {cv_rmse_std:.4f} | "
-                f"CV R²: {cv_r2_mean:.4f} ± {cv_r2_std:.4f}"
+                f"CV R²: {cv_r2_mean:.4f} ± {cv_r2_std:.4f} | Best params: {best_params}"
             )
-            ui.notification_show("Modelo de regresión lineal entrenado correctamente.", type="success")
+
+            ui.notification_show("Modelo SVR con tuning entrenado correctamente.", type="success")
 
         except Exception as e:
-            add_log(f"Error en regresión lineal: {str(e)}")
-            ui.notification_show(f"Error al entrenar regresión lineal: {str(e)}", type="error")
+            add_log(f"Error en Support Vector Regression: {str(e)}")
+            ui.notification_show(f"Error al entrenar SVR: {str(e)}", type="error")
 
     @output
     @render.ui
@@ -658,7 +711,8 @@ def register_model_handlers(
                 ui.p(f"Prueba: {state['test_rows']} registros"),
                 ui.p(f"SMOTE aplicado: {smote_text}"),
                 ui.p(f"Entrenamiento luego de SMOTE: {state['smote_rows']} registros"),
-                ui.p("Validación cruzada: 5-fold CV mediante GridSearchCV"),
+                ui.p("Ajuste de hiperparámetros: GridSearchCV"),
+                ui.p("Validación cruzada: 5-fold CV"),
                 ui.p(f"CV F1 Macro promedio: {state['cv_f1_mean']:.4f} ± {state['cv_f1_std']:.4f}"),
                 ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
                 class_="model-info-box"
@@ -673,8 +727,15 @@ def register_model_handlers(
             ui.tags.h4("Importancia de variables", class_="model-subtitle"),
             ui.HTML(f"""
                 <table class="data-table">
-                    <thead><tr><th>Variable</th><th>Importancia</th></tr></thead>
-                    <tbody>{importance_rows}</tbody>
+                    <thead>
+                        <tr>
+                            <th>Variable</th>
+                            <th>Importancia</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {importance_rows}
+                    </tbody>
                 </table>
             """),
 
@@ -723,52 +784,57 @@ def register_model_handlers(
         </div>
         """
 
-        coef_rows = "".join(
-            f"<tr><td>{row['Variable']}</td><td>{row['Coeficiente']:.6f}</td></tr>"
-            for _, row in state["coef_df"].iterrows()
+        params_rows = "".join(
+            f"<tr><td>{row['Parámetro']}</td><td>{row['Valor']}</td></tr>"
+            for _, row in state["params_df"].iterrows()
         )
+
+        sample_text = "Sí" if state.get("tuning_sample_used") else "No"
 
         return ui.div(
             ui.HTML(metrics_html),
 
             ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
             ui.div(
-                ui.p("Tipo de modelo: Regresión Lineal Múltiple"),
+                ui.p("Tipo de modelo: Support Vector Regression (SVR)"),
                 ui.p(f"Variable objetivo: {state['target']}"),
                 ui.p(f"Registros usados: {state['n_rows']}"),
                 ui.p(f"Entrenamiento: {state['train_rows']} registros"),
                 ui.p(f"Prueba: {state['test_rows']} registros"),
-                ui.p("Validación cruzada: 5-fold CV con KFold"),
+                ui.p("Ajuste de hiperparámetros: GridSearchCV"),
+                ui.p("Validación cruzada: 3-fold CV"),
+                ui.p(f"Registros usados para tuning: {state['tuning_rows']}"),
+                ui.p(f"Tuning con muestra: {sample_text}"),
                 ui.p(f"CV RMSE promedio: {state['cv_rmse_mean']:.4f} ± {state['cv_rmse_std']:.4f}"),
                 ui.p(f"CV R² promedio: {state['cv_r2_mean']:.4f} ± {state['cv_r2_std']:.4f}"),
-                ui.p(f"Intercepto: {state['intercept']:.6f}"),
                 ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
                 class_="model-info-box"
             ),
 
-            ui.tags.h4("Valores reales vs predichos", class_="model-subtitle"),
-            ui.HTML(state["reg_plot_html"]),
-
-            ui.tags.h4("Coeficientes del modelo", class_="model-subtitle"),
+            ui.tags.h4("Mejores hiperparámetros", class_="model-subtitle"),
             ui.HTML(f"""
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Variable</th>
-                            <th>Coeficiente</th>
+                            <th>Parámetro</th>
+                            <th>Valor</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {coef_rows}
+                        {params_rows}
                     </tbody>
                 </table>
             """),
 
+            ui.tags.h4("Valores reales vs predichos", class_="model-subtitle"),
+            ui.HTML(state["reg_plot_html"]),
+
             ui.div(
                 ui.p(
-                    "Interpretación: un coeficiente positivo indica que, manteniendo las demás variables constantes, "
-                    "el aumento de esa variable se asocia con un incremento en la variable objetivo. "
-                    "Un coeficiente negativo indica una asociación inversa.",
+                    "Interpretación: SVR busca una función que aproxime la variable objetivo manteniendo "
+                    "un margen de tolerancia. El kernel RBF permite modelar relaciones no lineales. "
+                    "A diferencia de la regresión lineal, SVR no entrega coeficientes directamente interpretables "
+                    "por variable.",
                     style="color: var(--muted); margin-top: 10px;"
                 ),
                 class_="model-info-box"
@@ -786,6 +852,7 @@ def register_model_handlers(
 
         if state["problem_type"] == "classification":
             random_classification_prediction(state)
+
         elif state["problem_type"] == "regression":
             random_regression_prediction(state)
 
@@ -877,7 +944,10 @@ def register_model_handlers(
             <h4 class="model-subtitle">Variables del registro evaluado</h4>
             <table class="data-table">
                 <thead>
-                    <tr><th>Variable</th><th>Valor</th></tr>
+                    <tr>
+                        <th>Variable</th>
+                        <th>Valor</th>
+                    </tr>
                 </thead>
                 <tbody>
                     {feature_rows}
@@ -893,7 +963,7 @@ def register_model_handlers(
 
         return ui.HTML(f"""
             <div class="model-info-box">
-                <h4 style="color:var(--accent);">Predicción de regresión lineal</h4>
+                <h4 style="color:var(--accent);">Predicción con Support Vector Regression</h4>
                 <p><b>Valor real:</b> {p_state['true_value']}</p>
                 <p><b>Valor predicho:</b> {p_state['pred_value']}</p>
                 <p><b>Error absoluto:</b> {p_state['abs_error']}</p>
@@ -902,7 +972,10 @@ def register_model_handlers(
             <h4 class="model-subtitle">Variables del registro evaluado</h4>
             <table class="data-table">
                 <thead>
-                    <tr><th>Variable</th><th>Valor</th></tr>
+                    <tr>
+                        <th>Variable</th>
+                        <th>Valor</th>
+                    </tr>
                 </thead>
                 <tbody>
                     {feature_rows}
