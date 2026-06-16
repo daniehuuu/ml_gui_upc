@@ -45,6 +45,7 @@ def sidebar_nav_ui(current_page, current_role="user"):
             nav_section("VISTA TÉCNICA / ANALISTA"),
             nav_button("nav_overview", "📊", "Overview", "overview"),
             nav_button("nav_eda", "📈", "EDA", "eda"),
+            nav_button("nav_db_sync", "🔄", "Sincronizar BD", "db_sync"),
             nav_button("nav_missing", "🧩", "Missing Values", "missing"),
             nav_button("nav_outlier", "🎯", "Outliers", "outlier"),
             nav_button("nav_encode", "🔢", "Encoding", "encode"),

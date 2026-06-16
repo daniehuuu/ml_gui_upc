@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from scipy.stats import shapiro
 from shiny import ui
 from scipy.stats import gaussian_kde
+from sqlalchemy import create_engine
 
 separator_options = {
     ",": "Coma ( , )",
@@ -22,6 +23,10 @@ missing_categories = [
     (0.15, 1.0, "Perjudicial", "var(--accent2)", "> 15%"),
 ]
 
+def connect_bd():
+    # Formato: mysql+pymysql://usuario:contraseña@servidor:puerto/nombre_de_bd
+    engine = create_engine('mysql+pymysql://root:aldimi_super_secret@localhost:3310/aldimi_db')
+    return engine
 
 def read_csv_dataset(file_path, separator, header, encoding):
     last_error = None

@@ -100,6 +100,11 @@ def render_home(df=None):
                 ui.p(dataset_description, class_="portal-description"),
                 ui.div(
                     ui.input_action_button(
+                        "connect_db_btn",
+                        "🛢️ Conectar a Base de Datos",
+                        class_="btn btn-warning portal-btn" 
+                    ),
+                    ui.input_action_button(
                         "quick_patient",
                         "Consultar paciente",
                         class_="btn btn-primary portal-btn"

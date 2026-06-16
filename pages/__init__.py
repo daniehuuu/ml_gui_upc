@@ -3,6 +3,7 @@
 from .home import render_home
 from .overview import render_overview
 from .eda import render_eda, register_eda_handlers
+from .db_sync import render_db_sync, register_db_sync_handlers
 from .missing import render_missing, register_missing_handlers
 from .encode import render_encode, register_encode_handlers
 from .scale import render_scale, register_scale_handlers
@@ -38,4 +39,6 @@ __all__ = [
     "render_export",
     "register_export_handlers",
     "render_docs",
+    "render_db_sync",
+    "register_db_sync_handlers"
 ]

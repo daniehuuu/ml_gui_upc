@@ -43,10 +43,19 @@ def render_overview(df, load_config, dtype_manual_state):
                 class_="card",
             ),
             ui.div(
+                ui.input_action_button("load_patients_db", "⬇️ Cargar Pacientes (BD)", class_="btn btn-info"),
+                class_="card"
+            ),
+            ui.div(
+                ui.input_action_button("load_inventory_db", "⬇️ Cargar Inventario (BD)", class_="btn btn-info"),
+                class_="card"
+            ),
+            ui.div(
                 ui.div("ESTADO", class_="card-title"),
                 ui.div("No hay dataset cargado todavía. Usa el botón anterior para seleccionar un archivo.", style="color:var(--muted);"),
                 class_="card",
             ),
+            
         )
 
     n_rows, n_cols = df.shape

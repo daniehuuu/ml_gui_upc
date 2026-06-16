@@ -10,7 +10,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from app_assets import CUSTOM_CSS as APP_CUSTOM_CSS, OPEN_DATASET_PICKER_JS
-from app_helpers import read_csv_dataset, get_num_cols, get_cat_cols
+from app_helpers import read_csv_dataset, get_num_cols, get_cat_cols, connect_bd
 from app_navigation import sidebar_nav_ui
 
 # Import page modules
@@ -38,6 +38,8 @@ from pages import (
     render_resource_availability,
     register_resource_availability_handlers,
     render_docs,
+    render_db_sync,
+    register_db_sync_handlers
 )
 
 # ─── UI ────────────────────────────────────────────────────────────────────
@@ -256,6 +258,12 @@ def server(input, output, session):
 
 
     @reactive.Effect
+    @reactive.event(input.nav_db_sync)
+    def _():
+        current_page.set("db_sync")
+
+
+    @reactive.Effect
     @reactive.event(input.nav_missing)
     def _():
         current_page.set("missing")
@@ -315,6 +323,7 @@ def server(input, output, session):
             "home",
             "overview",
             "eda",
+            "db_sync",
             "missing",
             "outlier",
             "encode",
@@ -343,6 +352,55 @@ def server(input, output, session):
     @reactive.event(input.quick_resource)
     def _():
         current_page.set("resource_availability")
+
+    @reactive.Effect
+    @reactive.event(input.connect_db_btn)
+    def _test_db_connection():
+        try:
+            engine = connect_bd()
+            with engine.connect() as conn:
+                pass # Si pasa esta línea, la conexión fue exitosa
+            
+            # Lanzamos la notificación de éxito
+            push_toast("¡Conexión exitosa a la base de datos ALDIMI!", "success")
+            add_log("Sistema conectado a MySQL (localhost:3310).")
+            
+        except Exception as e:
+            push_toast("Error al conectar a la BD. Revisa credenciales o Docker.", "error")
+            add_log(f"Error de conexión BD: {str(e)}")
+
+    # ── Upload data from db
+    @reactive.Effect
+    @reactive.event(input.load_patients_db)
+    def _load_patients_from_db():
+        try:
+            engine = connect_bd()
+            df = pd.read_sql("SELECT * FROM pacientes", engine)
+            
+            # Actualizamos los estados globales igual que cuando cargas un CSV
+            df_original.set(df.copy())
+            df_current.set(df.copy())
+            ops_log.set([f"Dataset Clínico cargado desde BD ({df.shape[0]} filas × {df.shape[1]} cols)"])
+            push_toast("Dataset de Pacientes cargado correctamente.", "success")
+        except Exception as e:
+            push_toast("Error al leer la tabla de pacientes.", "error")
+            add_log(f"Error BD Pacientes: {str(e)}")
+
+    @reactive.Effect
+    @reactive.event(input.load_inventory_db)
+    def _load_inventory_from_db():
+        try:
+            engine = connect_bd()
+            df = pd.read_sql("SELECT * FROM inventario", engine)
+            
+            df_original.set(df.copy())
+            df_current.set(df.copy())
+            ops_log.set([f"Dataset Logístico cargado desde BD ({df.shape[0]} filas × {df.shape[1]} cols)"])
+            push_toast("Dataset de Inventario cargado correctamente.", "success")
+        except Exception as e:
+            push_toast("Error al leer la tabla de inventario.", "error")
+            add_log(f"Error BD Inventario: {str(e)}")
+
     # ── Upload handlers
     @reactive.Effect
     @reactive.event(input.upload_csv)
@@ -363,9 +421,12 @@ def server(input, output, session):
         toast = toast_state()
         if not toast:
             return
-        reactive.invalidate_later(3.2)
-        latest = toast_state()
-        if latest and latest.get("id") == toast.get("id"):
+        now = time.time_ns()
+        # Calculamos cuántos segundos reales han transcurrido desde que se creó el toast
+        elapsed_seconds = (now - toast.get("id", now)) / 1e9
+        if elapsed_seconds < 3.0:
+            reactive.invalidate_later(3.2)
+        else:
             toast_state.set(None)
 
     # ── Overview page: dtype change handlers
@@ -459,6 +520,7 @@ def server(input, output, session):
     register_patient_search_handlers(input,output,df_original,df_current,classification_model_state)
     register_resource_availability_handlers(input,output,df_original,df_current,regression_model_state)
     register_export_handlers(input, output, df_current)
+    register_db_sync_handlers(input, output, session, df_current, push_toast, add_log, connect_bd)
 
     # ─────────────────────────────────────────────────────────────
     # MAIN CONTENT ROUTER
@@ -478,6 +540,8 @@ def server(input, output, session):
             return render_resource_availability(df_original())
         elif page == "eda":
             return render_eda(df)
+        elif page == "db_sync":
+            return render_db_sync(df)
         elif page == "missing":
             return render_missing(df)
         elif page == "encode":

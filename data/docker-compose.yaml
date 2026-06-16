@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  aldimi-db:
+    image: mysql:8.0
+    container_name: aldimi_mysql_container
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: aldimi_super_secret
+      MYSQL_DATABASE: aldimi_db
+      MYSQL_USER: aldimi_user
+      MYSQL_PASSWORD: aldimi_password
+    ports:
+      - "3310:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
