@@ -212,6 +212,37 @@ def server(input, output, session):
             return int_like.astype("int64"), None
 
         return None, f"Dtype no soportado: {target_dtype}"
+    
+    # ── Auto-Loaders de Base de Datos ───────────────────────────
+    def _ensure_patient_data():
+        """Garantiza que el dataset clínico esté en memoria"""
+        df = df_original()
+        # Si está vacío o tiene el dataset logístico (le falta patient_code)
+        if df is None or "patient_code" not in df.columns:
+            try:
+                engine = connect_bd()
+                new_df = pd.read_sql("SELECT * FROM pacientes", engine)
+                df_original.set(new_df)
+                df_current.set(new_df.copy())
+                add_log("Auto-carga: Dataset Clínico descargado desde BD.")
+            except Exception as e:
+                print(f"Error auto-carga BD Pacientes: {e}")
+                push_toast("Error al conectar con la base de datos clínica.", "error")
+
+    def _ensure_resource_data():
+        """Garantiza que el dataset logístico esté en memoria"""
+        df = df_original()
+        # Si está vacío o tiene el dataset de pacientes (le falta resource_code)
+        if df is None or "resource_code" not in df.columns:
+            try:
+                engine = connect_bd()
+                new_df = pd.read_sql("SELECT * FROM inventario", engine)
+                df_original.set(new_df)
+                df_current.set(new_df.copy())
+                add_log("Auto-carga: Dataset Logístico descargado desde BD.")
+            except Exception as e:
+                print(f"Error auto-carga BD Inventario: {e}")
+                push_toast("Error al conectar con la red logística.", "error")
 
     # ── Load default CSV on startup
     @reactive.Effect
@@ -231,17 +262,18 @@ def server(input, output, session):
     @reactive.event(input.nav_home)
     def _():
         current_page.set("home")
-
+        
 
     @reactive.Effect
-    @reactive.event(input.nav_patient_search)
-    def _():
+    @reactive.event(input.nav_patient_search, input.quick_patient)
+    def _nav_patient():
+        _ensure_patient_data() # Carga de la BD si es necesario
         current_page.set("patient_search")
 
-
     @reactive.Effect
-    @reactive.event(input.nav_resource_availability)
-    def _():
+    @reactive.event(input.nav_resource_availability, input.quick_resource)
+    def _nav_resource():
+        _ensure_resource_data() # Carga de la BD si es necesario
         current_page.set("resource_availability")
 
 
@@ -342,16 +374,16 @@ def server(input, output, session):
 
 
     # ── Botones rápidos del Home ─────────────────────────────
-    @reactive.Effect
-    @reactive.event(input.quick_patient)
-    def _():
-        current_page.set("patient_search")
-
-
-    @reactive.Effect
-    @reactive.event(input.quick_resource)
-    def _():
-        current_page.set("resource_availability")
+    #@reactive.Effect
+    #@reactive.event(input.quick_patient)
+    #def _():
+    #    current_page.set("patient_search")
+#
+#
+    #@reactive.Effect
+    #@reactive.event(input.quick_resource)
+    #def _():
+    #    current_page.set("resource_availability")
 
     @reactive.Effect
     @reactive.event(input.connect_db_btn)
