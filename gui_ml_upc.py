@@ -103,7 +103,7 @@ def server(input, output, session):
     ops_log = reactive.Value([])
     dtype_manual_state = reactive.Value({})
     toast_state = reactive.Value(None)
-    load_config = reactive.Value({"separator": ";", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
+    load_config = reactive.Value({"separator": ",", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
     
     # Estados globales para compartir modelos entre páginas
     classification_model_state = reactive.Value(None)
@@ -111,7 +111,7 @@ def server(input, output, session):
 
     # ── Helper Functions
     def resolve_separator():
-        choice = input.load_sep() if hasattr(input, "load_sep") else ";"
+        choice = input.load_sep() if hasattr(input, "load_sep") else ","
         if choice == "custom":
             custom_value = (input.load_custom_sep() if hasattr(input, "load_custom_sep") else "") or "|"
             return custom_value

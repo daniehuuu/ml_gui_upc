@@ -150,6 +150,7 @@ body {
   border-radius: 8px;
   padding: 18px;
   margin-bottom: 16px;
+  color: var(--text);
 }
 .card-title {
   font-size: 11px;
