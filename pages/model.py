@@ -1,4 +1,5 @@
-"""Modelling page: Classification + Tuned Support Vector Regression + Cross Validation"""
+"""Modelling page: Semi-supervised Classification + Tuned Support Vector Regression + Cross Validation"""
+
 from shiny import ui, render, reactive
 from app_helpers import get_num_cols
 
@@ -11,6 +12,7 @@ import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split, GridSearchCV, KFold, cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVR
+from sklearn.semi_supervised import SelfTrainingClassifier
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -21,9 +23,11 @@ from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    roc_curve,
+    auc,
+    roc_auc_score,
 )
-from sklearn.preprocessing import LabelEncoder
-from imblearn.over_sampling import SMOTE
+from sklearn.preprocessing import LabelEncoder, label_binarize
 
 
 def render_model(df):
@@ -37,7 +41,7 @@ def render_model(df):
         ui.div(
             ui.tags.h2("Modelling", class_="section-title"),
             ui.p(
-                "Entrenamiento de modelos supervisados con ajuste de hiperparámetros y validación cruzada.",
+                "Entrenamiento de modelos semi-supervisados y de regresión con ajuste de hiperparámetros y validación cruzada.",
                 class_="section-sub"
             )
         ),
@@ -49,7 +53,7 @@ def render_model(df):
                 "problem_type",
                 "Tipo de problema:",
                 choices={
-                    "classification": "Clasificación - Random Forest Classifier",
+                    "classification": "Semi-supervisado - Self-Training + Random Forest",
                     "regression": "Regresión - Support Vector Regression"
                 },
                 selected="classification"
@@ -196,13 +200,71 @@ def register_model_handlers(
         elif problem_type == "regression":
             train_svr_model(df, target, features)
 
+    def build_multiclass_roc_html(y_test, y_proba, class_names):
+        """Build multiclass ROC curve using One-vs-Rest strategy"""
+
+        try:
+            n_classes = len(class_names)
+            y_test_bin = label_binarize(y_test, classes=list(range(n_classes)))
+
+            fig = go.Figure()
+
+            for i, class_name in enumerate(class_names):
+                fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                roc_auc = auc(fpr, tpr)
+
+                fig.add_trace(go.Scatter(
+                    x=fpr,
+                    y=tpr,
+                    mode="lines",
+                    name=f"{class_name} - AUC {roc_auc:.3f}"
+                ))
+
+            fig.add_trace(go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                name="Azar",
+                line=dict(dash="dash")
+            ))
+
+            fig.update_layout(
+                title="Curva ROC multiclase One-vs-Rest",
+                xaxis_title="False Positive Rate",
+                yaxis_title="True Positive Rate",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"),
+                margin=dict(l=40, r=40, t=60, b=40),
+                height=440
+            )
+
+            return fig.to_html(
+                full_html=False,
+                include_plotlyjs=False,
+                config={"displayModeBar": False}
+            )
+
+        except Exception as e:
+            return f"""
+            <div class="model-info-box">
+                <p style="color: var(--accent2);">
+                    No se pudo generar la curva ROC: {str(e)}
+                </p>
+            </div>
+            """
+
     def train_classification_model(df, target, features):
-        """Train Random Forest Classifier with optional SMOTE and GridSearchCV"""
+        """Train semi-supervised Self-Training model with Random Forest base estimator"""
         try:
             start_time = time.time()
 
             with ui.Progress(min=0, max=100) as p:
-                p.set(5, message="🤖 Entrenando clasificación... 5%", detail="Preparando datos")
+                p.set(
+                    5,
+                    message="🤖 Entrenando modelo semi-supervisado... 5%",
+                    detail="Preparando datos"
+                )
 
                 data = df[features + [target]].copy().dropna()
 
@@ -220,8 +282,12 @@ def register_model_handlers(
                         type="error"
                     )
                     return
-                
-                p.set(20, message="🤖 Entrenando clasificación... 20%", detail="Codificando variable objetivo")
+
+                p.set(
+                    20,
+                    message="🤖 Entrenando modelo semi-supervisado... 20%",
+                    detail="Codificando variable objetivo"
+                )
 
                 target_encoder = LabelEncoder()
                 y_encoded = target_encoder.fit_transform(y.astype(str))
@@ -232,7 +298,11 @@ def register_model_handlers(
                     ui.notification_show("La variable objetivo necesita al menos 2 clases.", type="error")
                     return
 
-                p.set(35, message="🤖 Entrenando clasificación... 35%", detail="Dividiendo train/test")
+                p.set(
+                    35,
+                    message="🤖 Entrenando modelo semi-supervisado... 35%",
+                    detail="Dividiendo train/test"
+                )
 
                 X_train, X_test, y_train, y_test = train_test_split(
                     X,
@@ -242,25 +312,45 @@ def register_model_handlers(
                     stratify=y_encoded
                 )
 
-                p.set(50, message="🤖 Entrenando clasificación... 50%", detail="Aplicando SMOTE si es posible")
+                p.set(
+                    45,
+                    message="🤖 Entrenando modelo semi-supervisado... 45%",
+                    detail="Simulando registros no etiquetados"
+                )
 
-                train_class_counts = pd.Series(y_train).value_counts()
-                min_class_count = train_class_counts.min()
+                # ── Simulación semi-supervisada ─────────────────────────────
+                # Solo una fracción del conjunto de entrenamiento conserva su etiqueta.
+                # El resto se marca como -1, que representa datos no etiquetados.
+                labeled_fraction = 0.25
+                rng = np.random.RandomState(42)
 
-                if min_class_count >= 2:
-                    k_neighbors = min(5, min_class_count - 1)
-                    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
-                    X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
-                    smote_applied = True
-                else:
-                    X_train_res, y_train_res = X_train, y_train
-                    smote_applied = False
+                y_train_semi = np.full_like(y_train, fill_value=-1)
+
+                for class_id in np.unique(y_train):
+                    class_idx = np.where(y_train == class_id)[0]
+
+                    # Mantenemos mínimo 2 etiquetas por clase para evitar que alguna clase desaparezca.
+                    n_labeled = max(2, int(len(class_idx) * labeled_fraction))
+                    n_labeled = min(n_labeled, len(class_idx))
+
+                    selected_idx = rng.choice(
+                        class_idx,
+                        size=n_labeled,
+                        replace=False
+                    )
+
+                    y_train_semi[selected_idx] = y_train[selected_idx]
+
+                labeled_count = int(np.sum(y_train_semi != -1))
+                unlabeled_count = int(np.sum(y_train_semi == -1))
 
                 p.set(
-                    65,
-                    message="🤖 Entrenando clasificación... 65%",
-                    detail="Ejecutando GridSearchCV con 5-fold CV"
+                    60,
+                    message="🤖 Entrenando modelo semi-supervisado... 60%",
+                    detail="Ajustando Random Forest base"
                 )
+
+                labeled_mask = y_train_semi != -1
 
                 rf = RandomForestClassifier(random_state=42)
 
@@ -275,20 +365,45 @@ def register_model_handlers(
                     estimator=rf,
                     param_grid=param_grid,
                     scoring="f1_macro",
-                    cv=5,
+                    cv=3,
                     n_jobs=-1,
                     verbose=0
                 )
 
-                grid.fit(X_train_res, y_train_res)
+                grid.fit(X_train.iloc[labeled_mask], y_train_semi[labeled_mask])
 
+                best_rf = grid.best_estimator_
                 cv_f1_mean = grid.best_score_
                 cv_f1_std = grid.cv_results_["std_test_score"][grid.best_index_]
 
-                p.set(85, message="🤖 Entrenando clasificación... 85%", detail="Evaluando modelo en test set")
+                p.set(
+                    75,
+                    message="🤖 Entrenando modelo semi-supervisado... 75%",
+                    detail="Ejecutando Self-Training"
+                )
 
-                best_model = grid.best_estimator_
-                y_pred = best_model.predict(X_test)
+                self_training_model = SelfTrainingClassifier(
+                    estimator=best_rf,
+                    threshold=0.75,
+                    criterion="threshold",
+                    max_iter=10,
+                    verbose=False
+                )
+
+                self_training_model.fit(X_train, y_train_semi)
+
+                p.set(
+                    88,
+                    message="🤖 Entrenando modelo semi-supervisado... 88%",
+                    detail="Evaluando modelo en test set"
+                )
+
+                y_pred = self_training_model.predict(X_test)
+
+                try:
+                    y_proba = self_training_model.predict_proba(X_test)
+                except Exception:
+                    y_proba = None
 
                 accuracy = accuracy_score(y_test, y_pred)
                 precision = precision_score(y_test, y_pred, average="macro", zero_division=0)
@@ -337,9 +452,37 @@ def register_model_handlers(
                     config={"displayModeBar": False}
                 )
 
+                if y_proba is not None:
+                    roc_html = build_multiclass_roc_html(y_test, y_proba, class_names)
+
+                    try:
+                        roc_auc_macro = roc_auc_score(
+                            y_test,
+                            y_proba,
+                            multi_class="ovr",
+                            average="macro"
+                        )
+                    except Exception:
+                        roc_auc_macro = None
+                else:
+                    roc_html = """
+                    <div class="model-info-box">
+                        <p style="color: var(--accent2);">
+                            No se pudo generar la curva ROC porque el modelo no devolvió probabilidades.
+                        </p>
+                    </div>
+                    """
+                    roc_auc_macro = None
+
+                try:
+                    base_estimator = self_training_model.estimator_
+                    importance_values = base_estimator.feature_importances_
+                except Exception:
+                    importance_values = best_rf.feature_importances_
+
                 importance_df = pd.DataFrame({
                     "Variable": features,
-                    "Importancia": best_model.feature_importances_
+                    "Importancia": importance_values
                 }).sort_values(by="Importancia", ascending=False)
 
                 elapsed = int(time.time() - start_time)
@@ -351,8 +494,10 @@ def register_model_handlers(
                     "n_rows": data.shape[0],
                     "train_rows": len(y_train),
                     "test_rows": len(y_test),
-                    "smote_rows": len(y_train_res),
-                    "smote_applied": smote_applied,
+
+                    "labeled_fraction": labeled_fraction,
+                    "labeled_count": labeled_count,
+                    "unlabeled_count": unlabeled_count,
 
                     "accuracy": accuracy,
                     "precision": precision,
@@ -365,11 +510,13 @@ def register_model_handlers(
                     "best_params": grid.best_params_,
                     "report_dict": report_dict,
                     "cm_html": cm_html,
+                    "roc_html": roc_html,
+                    "roc_auc_macro": roc_auc_macro,
                     "importance_df": importance_df,
                     "elapsed": elapsed,
-                    "best_model": best_model,
+                    "best_model": self_training_model,
                     "X_test": X_test,
-                    "y_test": y_test,
+                    "y_test": pd.Series(y_test),
                     "class_names": class_names,
                 })
 
@@ -377,28 +524,43 @@ def register_model_handlers(
                     "problem_type": "classification",
                     "target": target,
                     "features": features,
-                    "best_model": best_model,
+                    "best_model": self_training_model,
                     "class_names": class_names,
                     "target_encoder": target_encoder,
                     "encoding_state": encoding_state(),
                     "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 })
 
-                add_log(f"Modelo global de clasificación guardado: {target} | Features: {len(features)}")
+                add_log(
+                    f"Modelo semi-supervisado global guardado: {target} | "
+                    f"Features: {len(features)}"
+                )
 
                 prediction_state.set(None)
 
-                p.set(100, message="✅ Clasificación entrenada 100%", detail=f"Tiempo total: {elapsed}s")
+                p.set(
+                    100,
+                    message="✅ Modelo semi-supervisado entrenado 100%",
+                    detail=f"Tiempo total: {elapsed}s"
+                )
 
             add_log(
-                f"Random Forest Classifier entrenado | "
-                f"F1 Test: {f1:.4f} | CV F1 Macro: {cv_f1_mean:.4f} ± {cv_f1_std:.4f}"
+                f"Self-Training + Random Forest entrenado | "
+                f"F1 Test: {f1:.4f} | "
+                f"CV F1 RF base: {cv_f1_mean:.4f} ± {cv_f1_std:.4f}"
             )
-            ui.notification_show("Modelo de clasificación entrenado correctamente.", type="success")
+
+            ui.notification_show(
+                "Modelo semi-supervisado entrenado correctamente.",
+                type="success"
+            )
 
         except Exception as e:
-            add_log(f"Error en clasificación: {str(e)}")
-            ui.notification_show(f"Error al entrenar clasificación: {str(e)}", type="error")
+            add_log(f"Error en clasificación semi-supervisada: {str(e)}")
+            ui.notification_show(
+                f"Error al entrenar clasificación semi-supervisada: {str(e)}",
+                type="error"
+            )
 
     def train_svr_model(df, target, features):
         """Train Support Vector Regression with GridSearchCV tuning"""
@@ -502,7 +664,7 @@ def register_model_handlers(
                     scoring="r2",
                     n_jobs=-1
                 )
-                
+
                 cv_r2_mean = cv_r2_scores.mean()
                 cv_r2_std = cv_r2_scores.std()
 
@@ -642,6 +804,9 @@ def register_model_handlers(
         return ui.div("Tipo de modelo no reconocido.")
 
     def render_classification_results(state):
+        roc_auc_value = state.get("roc_auc_macro")
+        roc_auc_text = f"{roc_auc_value:.4f}" if roc_auc_value is not None else "N/A"
+
         metrics_html = f"""
         <div class="metric-grid">
             <div class="metric-card">
@@ -662,7 +827,11 @@ def register_model_handlers(
             </div>
             <div class="metric-card">
                 <div class="metric-value">{state['cv_f1_mean']:.4f}</div>
-                <div class="metric-label">CV F1 Macro</div>
+                <div class="metric-label">CV F1 RF Base</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{roc_auc_text}</div>
+                <div class="metric-label">ROC AUC Macro</div>
             </div>
         </div>
         """
@@ -697,32 +866,37 @@ def register_model_handlers(
                 </tr>
                 """
 
-        smote_text = "Sí" if state["smote_applied"] else "No"
-
         return ui.div(
             ui.HTML(metrics_html),
 
             ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
             ui.div(
-                ui.p("Tipo de modelo: Random Forest Classifier"),
+                ui.p("Tipo de modelo: Self-Training + Random Forest Classifier"),
+                ui.p("Enfoque: Semi-supervisado"),
                 ui.p(f"Variable objetivo: {state['target']}"),
                 ui.p(f"Registros usados: {state['n_rows']}"),
                 ui.p(f"Entrenamiento: {state['train_rows']} registros"),
                 ui.p(f"Prueba: {state['test_rows']} registros"),
-                ui.p(f"SMOTE aplicado: {smote_text}"),
-                ui.p(f"Entrenamiento luego de SMOTE: {state['smote_rows']} registros"),
-                ui.p("Ajuste de hiperparámetros: GridSearchCV"),
-                ui.p("Validación cruzada: 5-fold CV"),
-                ui.p(f"CV F1 Macro promedio: {state['cv_f1_mean']:.4f} ± {state['cv_f1_std']:.4f}"),
+                ui.p(f"Porcentaje etiquetado inicial: {state['labeled_fraction'] * 100:.0f}%"),
+                ui.p(f"Registros etiquetados iniciales: {state['labeled_count']}"),
+                ui.p(f"Registros no etiquetados iniciales: {state['unlabeled_count']}"),
+                ui.p("Ajuste de hiperparámetros: GridSearchCV sobre Random Forest base"),
+                ui.p("Validación cruzada: 3-fold CV sobre los datos inicialmente etiquetados"),
+                ui.p("Pseudo-etiquetado: Self-Training con threshold de confianza 0.75"),
+                ui.p(f"CV F1 Macro promedio del RF base: {state['cv_f1_mean']:.4f} ± {state['cv_f1_std']:.4f}"),
+                ui.p(f"ROC AUC Macro: {roc_auc_text}"),
                 ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
                 class_="model-info-box"
             ),
 
-            ui.tags.h4("Mejores hiperparámetros", class_="model-subtitle"),
+            ui.tags.h4("Mejores hiperparámetros del Random Forest base", class_="model-subtitle"),
             ui.HTML(f"<div class='model-info-box'><ul>{params_html}</ul></div>"),
 
             ui.tags.h4("Matriz de confusión", class_="model-subtitle"),
             ui.HTML(state["cm_html"]),
+
+            ui.tags.h4("Curva ROC multiclase", class_="model-subtitle"),
+            ui.HTML(state["roc_html"]),
 
             ui.tags.h4("Importancia de variables", class_="model-subtitle"),
             ui.HTML(f"""
@@ -755,7 +929,18 @@ def register_model_handlers(
                         {report_rows}
                     </tbody>
                 </table>
-            """)
+            """),
+
+            ui.div(
+                ui.p(
+                    "Interpretación: el modelo usa un enfoque semi-supervisado mediante Self-Training. "
+                    "Primero se entrena un Random Forest con una fracción de datos etiquetados y luego se generan "
+                    "pseudo-etiquetas para registros inicialmente no etiquetados cuando el modelo alcanza suficiente confianza. "
+                    "La curva ROC se calcula con un esquema One-vs-Rest para comparar la capacidad de separación entre clases.",
+                    style="color: var(--muted); margin-top: 10px;"
+                ),
+                class_="model-info-box"
+            )
         )
 
     def render_regression_results(state):
@@ -868,7 +1053,12 @@ def register_model_handlers(
 
         true_y_encoded = y_test.iloc[random_idx] if isinstance(y_test, pd.Series) else y_test[random_idx]
         pred_encoded = best_model.predict(sample_X)[0]
-        probs = best_model.predict_proba(sample_X)[0]
+
+        try:
+            probs = best_model.predict_proba(sample_X)[0]
+            confidence = round(max(probs) * 100, 2)
+        except Exception:
+            confidence = None
 
         encodings = encoding_state()
 
@@ -880,7 +1070,7 @@ def register_model_handlers(
             "features_dict": sample_X.iloc[0].round(4).to_dict(),
             "true_label": true_label_text,
             "pred_label": pred_label_text,
-            "confidence": round(max(probs) * 100, 2)
+            "confidence": confidence
         })
 
     def random_regression_prediction(state):
@@ -928,6 +1118,11 @@ def register_model_handlers(
         status_text = "Correcto" if is_correct else "Incorrecto"
         status_color = "var(--accent)" if is_correct else "var(--accent2)"
 
+        if confidence is None:
+            confidence_text = "No disponible"
+        else:
+            confidence_text = f"{confidence}%"
+
         feature_rows = "".join(
             f"<tr><td>{k}</td><td>{v}</td></tr>"
             for k, v in p_state["features_dict"].items()
@@ -938,7 +1133,7 @@ def register_model_handlers(
                 <h4 style="color:{status_color};">Resultado: {status_text}</h4>
                 <p><b>Valor real:</b> {true_label}</p>
                 <p><b>Predicción:</b> {pred_label}</p>
-                <p><b>Confianza:</b> {confidence}%</p>
+                <p><b>Confianza:</b> {confidence_text}</p>
             </div>
 
             <h4 class="model-subtitle">Variables del registro evaluado</h4>
