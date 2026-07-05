@@ -46,11 +46,11 @@ missing_categories = [
 ]
 
 def connect_bd():
-    host = os.getenv("MYSQL_HOST", "localhost")
-    port = os.getenv("MYSQL_PORT", "3310")
-    user = os.getenv("MYSQL_USER", "root")
-    password = os.getenv("MYSQL_PASSWORD", "")
-    database = os.getenv("MYSQL_DATABASE", "aldimi_db")
+    host = os.getenv("MYSQLHOST", "localhost")
+    port = os.getenv("MYSQLPORT", "3310")
+    user = os.getenv("MYSQLUSER", "root")
+    password = os.getenv("MYSQLPASSWORD", "")
+    database = os.getenv("MYSQLDATABASE", "aldimi_db")
     
     url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
     return create_engine(url)
