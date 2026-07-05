@@ -11,13 +11,3 @@ show tables;
 Comprobar: docker exec -it aldimi_mysql_container mysql -u root -paldimi_super_secret aldimi_db  
 SHOW TABLES;  
 CTRL + d
-
-
-
-"Family_History",
-"Radiation_Exposure",
-"Iodine_Deficiency",
-"Smoking",
-"Obesity",
-"Diabetes",
-"Thyroid_Cancer_Risk"
