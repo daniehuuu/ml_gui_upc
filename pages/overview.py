@@ -44,10 +44,12 @@ def render_overview(df, load_config, dtype_manual_state):
             ),
             ui.div(
                 ui.input_action_button("load_patients_db", "⬇️ Cargar Pacientes (BD)", class_="btn btn-info"),
+                ui.input_action_button("preprocess_patients_db", "Preprocesar", class_="btn btn-info"),
                 class_="card"
             ),
             ui.div(
                 ui.input_action_button("load_inventory_db", "⬇️ Cargar Inventario (BD)", class_="btn btn-info"),
+                ui.input_action_button("preprocess_inventory_db", "Preprocesar", class_="btn btn-info"),
                 class_="card"
             ),
             ui.div(

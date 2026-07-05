@@ -9,6 +9,8 @@ import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
 
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+
 from app_assets import CUSTOM_CSS as APP_CUSTOM_CSS, OPEN_DATASET_PICKER_JS
 from app_helpers import read_csv_dataset, get_num_cols, get_cat_cols, connect_bd
 from app_navigation import sidebar_nav_ui
@@ -432,6 +434,155 @@ def server(input, output, session):
         except Exception as e:
             push_toast("Error al leer la tabla de inventario.", "error")
             add_log(f"Error BD Inventario: {str(e)}")
+
+    @reactive.Effect
+    @reactive.event(input.preprocess_patients_db)
+    def _preprocess_patients_db():
+        _ensure_patient_data()
+        
+        df = df_current()
+        if df is None:
+            push_toast("No hay datos de pacientes cargados para preprocesar.", "error")
+            return
+        
+        df_next = df.copy()
+        
+        keep_raw_cols = ["patient_code"]
+        
+        scale_sources = [
+            "Age",
+            "TSH_Level",
+            "T3_Level",
+            "T4_Level",
+            "Nodule_Size"
+        ]
+        
+        encode_sources = [
+            "Family_History",
+            "Radiation_Exposure",
+            "Iodine_Deficiency",
+            "Smoking",
+            "Obesity",
+            "Diabetes",
+            "Thyroid_Cancer_Risk",
+        ]
+        scaled_cols = []
+        encoded_cols = []
+        missing_cols = []
+
+        try:
+            for source_col in scale_sources:
+                if source_col not in df_next.columns:
+                    missing_cols.append(source_col)
+                    continue
+
+                numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
+                if numeric_data.isna().all():
+                    missing_cols.append(source_col)
+                    continue
+
+                scaled_col = f"{source_col}_scaled"
+                df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
+                scaled_cols.append(scaled_col)
+
+            for source_col in encode_sources:
+                if source_col not in df_next.columns:
+                    missing_cols.append(source_col)
+                    continue
+
+                encoder = LabelEncoder()
+                df_next[source_col] = encoder.fit_transform(df_next[source_col].astype(str))
+                encoded_cols.append(source_col)
+
+            keep_cols = [col for col in keep_raw_cols + scaled_cols + encoded_cols if col in df_next.columns]
+            df_next = df_next[keep_cols]
+
+            df_current.set(df_next)
+            dtype_manual_state.set({})
+
+            if missing_cols:
+                add_log(
+                    "Preprocesamiento pacientes: columnas no encontradas o sin valores válidos para procesar: "
+                    + ", ".join(missing_cols)
+                )
+
+            add_log(
+                "Preprocesamiento pacientes aplicado: StandardScaler en variables numéricas y LabelEncoder en variables categóricas."
+            )
+            push_toast("Pacientes preprocesados correctamente.", "success")
+
+        except Exception as e:
+            push_toast(f"Error al preprocesar pacientes: {str(e)}", "error")
+            add_log(f"Error en preprocesamiento de pacientes: {str(e)}")
+    
+    @reactive.Effect
+    @reactive.event(input.preprocess_inventory_db)
+    def _preprocess_inventory_db():
+        _ensure_resource_data()
+
+        df = df_current()
+        if df is None:
+            push_toast("No hay datos de inventario cargados para preprocesar.", "error")
+            return
+
+        df_next = df.copy()
+
+        # Columnas que se conservan sin escalar.
+        keep_raw_cols = ["resource_code", "warehouse_inventory_level"]
+
+        # Columnas que se escalan con StandardScaler y luego se conservan como *_scaled.
+        scale_sources = [
+            "handling_equipment_availability",
+            "weather_condition_severity",
+            "shipping_costs",
+            "supplier_reliability_score",
+            "lead_time_days",
+            "historical_demand",
+            "route_risk_level",
+            "customs_clearance_time",
+            "disruption_likelihood_score",
+            "delay_probability",
+            "delivery_time_deviation",
+        ]
+
+        scaled_cols = []
+        missing_cols = []
+
+        try:
+            for source_col in scale_sources:
+                if source_col not in df_next.columns:
+                    missing_cols.append(source_col)
+                    continue
+
+                numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
+                if numeric_data.isna().all():
+                    missing_cols.append(source_col)
+                    continue
+
+                scaled_col = f"{source_col}_scaled"
+                df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
+                scaled_cols.append(scaled_col)
+
+            keep_cols = [col for col in keep_raw_cols + scaled_cols if col in df_next.columns]
+            df_next = df_next[keep_cols]
+
+            df_current.set(df_next)
+            dtype_manual_state.set({})
+
+            if missing_cols:
+                add_log(
+                    "Preprocesamiento inventario: columnas no encontradas o sin valores numéricos para escalar: "
+                    + ", ".join(missing_cols)
+                )
+
+            add_log(
+                "Preprocesamiento inventario aplicado: StandardScaler en variables numéricas y recorte de columnas finales."
+            )
+            push_toast("Inventario preprocesado correctamente.", "success")
+
+        except Exception as e:
+            push_toast(f"Error al preprocesar inventario: {str(e)}", "error")
+            add_log(f"Error en preprocesamiento de inventario: {str(e)}")
 
     # ── Upload handlers
     @reactive.Effect

@@ -38,7 +38,6 @@ def register_db_sync_handlers(input, output, session, df_current, push_toast, ad
             engine = connect_bd()
             # El secreto de la integración: if_exists='append'
             df.to_sql(name=target, con=engine, if_exists='append', index=False)
-            
             push_toast(f"Se insertaron {len(df)} registros nuevos en la tabla '{target}'.", "success")
             add_log(f"Sincronización BD: {len(df)} filas añadidas a {target}.")
         except Exception as e:
