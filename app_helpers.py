@@ -1,5 +1,6 @@
 from html import escape
 
+import os
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -7,6 +8,28 @@ import plotly.graph_objects as go
 from scipy.stats import shapiro
 from shiny import ui
 from scipy.stats import gaussian_kde
+from sqlalchemy import create_engine
+
+
+def _load_local_env_file():
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        return
+
+    with open(env_path, "r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_local_env_file()
 
 separator_options = {
     ",": "Coma ( , )",
@@ -22,6 +45,15 @@ missing_categories = [
     (0.15, 1.0, "Perjudicial", "var(--accent2)", "> 15%"),
 ]
 
+def connect_bd():
+    host = os.getenv("MYSQLHOST", "localhost")
+    port = os.getenv("MYSQLPORT", "3310")
+    user = os.getenv("MYSQLUSER", "root")
+    password = os.getenv("MYSQLPASSWORD", "")
+    database = os.getenv("MYSQLDATABASE", "aldimi_db")
+    
+    url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+    return create_engine(url)
 
 def read_csv_dataset(file_path, separator, header, encoding):
     last_error = None

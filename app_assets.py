@@ -80,6 +80,7 @@ body {
   min-height: calc(100vh - 61px);
 }
 
+
 /* ── Sidebar ── */
 .sidebar {
   background: var(--surface);
@@ -149,6 +150,7 @@ body {
   border-radius: 8px;
   padding: 18px;
   margin-bottom: 16px;
+  color: var(--text);
 }
 .card-title {
   font-size: 11px;
@@ -603,4 +605,523 @@ label { color: var(--muted) !important; font-size: 11px !important; font-family:
   margin-top: 12px;
 }
 .shiny-download-link:hover { background: #00c988; transform: translateY(-1px); }
+
+/* =========================
+   MODELLING METRICS
+========================= */
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.metric-card {
+    background: rgba(20, 28, 52, 0.9);
+    border: 1px solid rgba(0, 255, 200, 0.15);
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 0 12px rgba(0, 255, 200, 0.05);
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 6px;
+}
+
+.metric-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* =========================
+   TABLES
+========================= */
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 0.9rem;
+    border-radius: 14px;
+    overflow: hidden;
+}
+
+.data-table th,
+.data-table td {
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.data-table th {
+    background: rgba(0, 255, 200, 0.08);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.data-table td {
+    color: var(--text);
+}
+
+.data-table tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.data-table tr:hover {
+    background: rgba(0, 255, 200, 0.03);
+}
+
+/* =========================
+   SECTION TITLES
+========================= */
+
+.model-subtitle {
+    color: var(--accent);
+    margin-top: 30px;
+    margin-bottom: 14px;
+    font-size: 1.15rem;
+    letter-spacing: 0.03em;
+    font-weight: 700;
+}
+
+/* =========================
+   INFO BOXES
+========================= */
+
+.model-info-box {
+    background: rgba(20, 28, 52, 0.65);
+    border: 1px solid rgba(0, 255, 200, 0.14);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+}
+
+.model-info-box p {
+    margin: 6px 0;
+    color: var(--text);
+}
+
+.model-info-box ul {
+    margin: 0;
+    padding-left: 20px;
+    color: var(--text);
+}
+
+.model-info-box li {
+    margin: 4px 0;
+}
+
+/* =========================
+   CONFUSION MATRIX (PLOTLY)
+========================= */
+
+.js-plotly-plot {
+    border: 1px solid rgba(0, 255, 200, 0.14);
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(20, 28, 52, 0.45);
+    padding: 8px;
+    margin-top: 12px;
+}
+
+/* =========================
+   CLASSIFICATION REPORT
+========================= */
+
+.classification-table th,
+.classification-table td {
+    text-align: center;
+}
+
+.classification-table th:first-child,
+.classification-table td:first-child {
+    text-align: left;
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.classification-table tbody tr:hover {
+    background: rgba(0, 255, 200, 0.04);
+}
+
+/* =========================
+   LEGACY PRE BLOCK
+   (optional, kept for compatibility)
+========================= */
+
+.classification-report {
+    white-space: pre-wrap;
+    background: rgba(20, 28, 52, 0.9);
+    border: 1px solid rgba(0, 255, 200, 0.18);
+    border-radius: 14px;
+    padding: 18px;
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    overflow-x: auto;
+}
+
+
+/* ── Patient detail ── */
+.info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 8px;
+}
+
+.info-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.info-value {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 980px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.recommendation-box {
+  background: rgba(0, 229, 160, 0.06);
+  border: 1px solid rgba(0, 229, 160, 0.25);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--text);
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.recommendation-box.urgent {
+  background: rgba(255, 107, 107, 0.08);
+  border-color: rgba(255, 107, 107, 0.25);
+  border-left-color: var(--accent2);
+}
+
+.section-block-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent3);
+  margin-bottom: 12px;
+}
+
+.sub-card-clean {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+}
+
+/* ── ALDIMI Portal clean home ───────────────────────────── */
+
+.portal-hero {
+    background:
+        radial-gradient(circle at top left, rgba(0, 229, 160, 0.14), transparent 34%),
+        linear-gradient(135deg, rgba(18, 25, 42, 0.98), rgba(10, 16, 28, 0.98));
+    border: 1px solid rgba(0, 229, 160, 0.24);
+    border-radius: 18px;
+    padding: 34px;
+    margin-bottom: 24px;
+}
+
+.portal-eyebrow {
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+
+.portal-title {
+    color: var(--text);
+    font-size: 34px;
+    line-height: 1.1;
+    font-weight: 900;
+    letter-spacing: 1px;
+    margin: 0 0 14px 0;
+}
+
+.portal-subtitle {
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.7;
+    max-width: 900px;
+    margin: 0;
+}
+
+.portal-description {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.7;
+    max-width: 850px;
+    margin: 12px 0 0 0;
+}
+
+.dataset-pill {
+    display: inline-block;
+    margin-top: 20px;
+    background: rgba(0, 229, 160, 0.12);
+    border: 1px solid rgba(0, 229, 160, 0.28);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 7px 13px;
+}
+
+.portal-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+}
+
+.portal-btn {
+    min-width: 170px;
+}
+
+.portal-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.portal-kpi-card {
+    position: relative;
+    overflow: hidden;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    min-height: 145px;
+}
+
+.portal-kpi-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 18px;
+    bottom: 18px;
+    width: 4px;
+    background: var(--accent);
+    border-radius: 999px;
+}
+
+.portal-kpi-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+
+.portal-kpi-value {
+    color: var(--accent);
+    font-size: 34px;
+    font-weight: 900;
+    line-height: 1;
+    margin-bottom: 12px;
+}
+
+.portal-kpi-value.danger {
+    color: var(--accent2);
+}
+
+.portal-kpi-sub {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.portal-module-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.portal-module-card {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    min-height: 230px;
+}
+
+.portal-module-card:hover {
+    border-color: rgba(0, 229, 160, 0.32);
+}
+
+.portal-module-number {
+    color: rgba(0, 229, 160, 0.28);
+    font-size: 38px;
+    font-weight: 900;
+    line-height: 1;
+    margin-bottom: 12px;
+}
+
+.portal-module-title {
+    color: var(--accent3);
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+}
+
+.portal-text {
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.7;
+    margin: 0 0 16px 0;
+}
+
+.portal-tag {
+    display: inline-block;
+    background: rgba(0, 229, 160, 0.12);
+    border: 1px solid rgba(0, 229, 160, 0.25);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.portal-bottom-grid {
+    display: grid;
+    grid-template-columns: 1.35fr 0.85fr;
+    gap: 16px;
+}
+
+.portal-flow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 18px 0;
+}
+
+.portal-flow-step {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 9px 14px;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.portal-flow-step.active {
+    background: rgba(0, 229, 160, 0.14);
+    border-color: rgba(0, 229, 160, 0.35);
+    color: var(--accent);
+}
+
+.portal-flow-arrow {
+    color: var(--muted);
+    font-weight: 900;
+}
+
+@media (max-width: 1100px) {
+    .portal-kpi-grid,
+    .portal-module-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .portal-bottom-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 700px) {
+    .portal-kpi-grid,
+    .portal-module-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .portal-title {
+        font-size: 26px;
+    }
+
+    .portal-hero {
+        padding: 24px;
+    }
+}
+
+.role-selector-wrap {
+    padding: 0 14px 12px 14px;
+}
+
+.role-selector-wrap select {
+    width: 100%;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.nav-section-title {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    margin: 18px 14px 8px 14px;
+    opacity: 0.9;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.nav-section-title:first-child {
+    border-top: none;
+    margin-top: 8px;
+}
+
+.modal-body{
+  color: var(--muted);
+}
 """

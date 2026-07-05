@@ -9,12 +9,15 @@ import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
 
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+
 from app_assets import CUSTOM_CSS as APP_CUSTOM_CSS, OPEN_DATASET_PICKER_JS
-from app_helpers import read_csv_dataset, get_num_cols, get_cat_cols
+from app_helpers import read_csv_dataset, get_num_cols, get_cat_cols, connect_bd
 from app_navigation import sidebar_nav_ui
 
 # Import page modules
 from pages import (
+    render_home,
     render_overview,
     render_eda,
     register_eda_handlers,
@@ -30,7 +33,19 @@ from pages import (
     register_drop_handlers,
     render_export,
     register_export_handlers,
+    render_model,
+    register_model_handlers,
+    render_patient_search,
+    register_patient_search_handlers,
+    render_resource_availability,
+    register_resource_availability_handlers,
     render_docs,
+    render_db_sync,
+    register_db_sync_handlers
+)
+from pages.model import (
+    train_classification_model as build_classification_model_core,
+    train_svr_model as build_svr_model_core,
 )
 
 # ─── UI ────────────────────────────────────────────────────────────────────
@@ -86,17 +101,25 @@ app_ui = ui.page_fluid(
 def server(input, output, session):
 
     # ── State Management
-    current_page = reactive.Value("overview")
+    current_page = reactive.Value("home")
+    current_role = reactive.Value("user")
     df_original = reactive.Value(None)
     df_current = reactive.Value(None)
+    encoding_state = reactive.Value({})
     ops_log = reactive.Value([])
     dtype_manual_state = reactive.Value({})
     toast_state = reactive.Value(None)
-    load_config = reactive.Value({"separator": ";", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
+    load_config = reactive.Value({"separator": ",", "custom_separator": "|", "header": "infer", "encoding": "utf-8"})
+    
+    # Estados globales para compartir modelos entre páginas
+    classification_model_state = reactive.Value(None)
+    regression_model_state = reactive.Value(None)
+    model_results_state = reactive.Value(None)
+    model_prediction_state = reactive.Value(None)
 
     # ── Helper Functions
     def resolve_separator():
-        choice = input.load_sep() if hasattr(input, "load_sep") else ";"
+        choice = input.load_sep() if hasattr(input, "load_sep") else ","
         if choice == "custom":
             custom_value = (input.load_custom_sep() if hasattr(input, "load_custom_sep") else "") or "|"
             return custom_value
@@ -197,6 +220,233 @@ def server(input, output, session):
             return int_like.astype("int64"), None
 
         return None, f"Dtype no soportado: {target_dtype}"
+    
+    # ── Auto-Loaders de Base de Datos ───────────────────────────
+    def _ensure_patient_data():
+        """Garantiza que el dataset clínico esté en memoria"""
+        df = df_original()
+        # Si está vacío o tiene el dataset logístico (le falta patient_code)
+        if df is None or "patient_code" not in df.columns:
+            try:
+                engine = connect_bd()
+                new_df = pd.read_sql("SELECT * FROM pacientes", engine)
+                df_original.set(new_df)
+                df_current.set(new_df.copy())
+                add_log("Auto-carga: Dataset Clínico descargado desde BD.")
+            except Exception as e:
+                print(f"Error auto-carga BD Pacientes: {e}")
+                push_toast("Error al conectar con la base de datos clínica.", "error")
+
+    def _ensure_resource_data():
+        """Garantiza que el dataset logístico esté en memoria"""
+        df = df_original()
+        # Si está vacío o tiene el dataset de pacientes (le falta resource_code)
+        if df is None or "resource_code" not in df.columns:
+            try:
+                engine = connect_bd()
+                new_df = pd.read_sql("SELECT * FROM inventario", engine)
+                df_original.set(new_df)
+                df_current.set(new_df.copy())
+                add_log("Auto-carga: Dataset Logístico descargado desde BD.")
+            except Exception as e:
+                print(f"Error auto-carga BD Inventario: {e}")
+                push_toast("Error al conectar con la red logística.", "error")
+
+    def _load_patient_dataset():
+        try:
+            engine = connect_bd()
+            new_df = pd.read_sql("SELECT * FROM pacientes", engine)
+            df_original.set(new_df)
+            df_current.set(new_df.copy())
+            add_log("Dataset Clínico cargado desde BD.")
+            return new_df
+        except Exception as e:
+            push_toast("Error al leer la tabla de pacientes.", "error")
+            add_log(f"Error BD Pacientes: {str(e)}")
+            return None
+
+    def _load_inventory_dataset():
+        try:
+            engine = connect_bd()
+            new_df = pd.read_sql("SELECT * FROM inventario", engine)
+            df_original.set(new_df)
+            df_current.set(new_df.copy())
+            add_log("Dataset Logístico cargado desde BD.")
+            return new_df
+        except Exception as e:
+            push_toast("Error al leer la tabla de inventario.", "error")
+            add_log(f"Error BD Inventario: {str(e)}")
+            return None
+
+    def _preprocess_patient_dataset():
+        df = df_current()
+        if df is None:
+            return None
+
+        df_next = df.copy()
+
+        keep_raw_cols = ["patient_code"]
+
+        scale_sources = [
+            "Age",
+            "TSH_Level",
+            "T3_Level",
+            "T4_Level",
+            "Nodule_Size",
+        ]
+
+        encode_sources = [
+            "Family_History",
+            "Radiation_Exposure",
+            "Iodine_Deficiency",
+            "Smoking",
+            "Obesity",
+            "Diabetes",
+            "Thyroid_Cancer_Risk",
+        ]
+
+        scaled_cols = []
+        encoded_cols = []
+        missing_cols = []
+        current_encoding_dict = dict(encoding_state())
+
+        for source_col in scale_sources:
+            if source_col not in df_next.columns:
+                missing_cols.append(source_col)
+                continue
+
+            numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
+            if numeric_data.isna().all():
+                missing_cols.append(source_col)
+                continue
+
+            scaled_col = f"{source_col}_scaled"
+            df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
+            scaled_cols.append(scaled_col)
+
+        for source_col in encode_sources:
+            if source_col not in df_next.columns:
+                missing_cols.append(source_col)
+                continue
+
+            encoder = LabelEncoder()
+            df_next[source_col] = encoder.fit_transform(df_next[source_col].astype(str))
+            encoded_cols.append(source_col)
+            current_encoding_dict[source_col] = {
+                str(class_name): int(i) for i, class_name in enumerate(encoder.classes_)
+            }
+
+        keep_cols = [col for col in keep_raw_cols + scaled_cols + encoded_cols if col in df_next.columns]
+        df_next = df_next[keep_cols]
+
+        encoding_state.set(current_encoding_dict)
+        df_current.set(df_next)
+        dtype_manual_state.set({})
+
+        return {"df": df_next, "missing_cols": missing_cols}
+
+    def _preprocess_inventory_dataset():
+        df = df_current()
+        if df is None:
+            return None
+
+        df_next = df.copy()
+
+        keep_raw_cols = ["resource_code", "warehouse_inventory_level"]
+
+        scale_sources = [
+            "handling_equipment_availability",
+            "weather_condition_severity",
+            "shipping_costs",
+            "supplier_reliability_score",
+            "lead_time_days",
+            "historical_demand",
+            "route_risk_level",
+            "customs_clearance_time",
+            "disruption_likelihood_score",
+            "delay_probability",
+            "delivery_time_deviation",
+        ]
+
+        scaled_cols = []
+        missing_cols = []
+
+        for source_col in scale_sources:
+            if source_col not in df_next.columns:
+                missing_cols.append(source_col)
+                continue
+
+            numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
+            if numeric_data.isna().all():
+                missing_cols.append(source_col)
+                continue
+
+            scaled_col = f"{source_col}_scaled"
+            df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
+            scaled_cols.append(scaled_col)
+
+        keep_cols = [col for col in keep_raw_cols + scaled_cols if col in df_next.columns]
+        df_next = df_next[keep_cols]
+
+        df_current.set(df_next)
+        dtype_manual_state.set({})
+
+        return {"df": df_next, "missing_cols": missing_cols}
+
+    def _auto_train_patient_model():
+        df = df_current()
+        if df is None or "patient_code" not in df.columns or "Thyroid_Cancer_Risk" not in df.columns:
+            return False
+
+        target = "Thyroid_Cancer_Risk"
+        features = [c for c in df.columns if c not in {"patient_code", target}]
+        if not features:
+            return False
+
+        model_state, global_state = build_classification_model_core(df, target, features, encoding_state=encoding_state())
+        model_results_state.set(model_state)
+        classification_model_state.set(global_state)
+        model_prediction_state.set(None)
+        add_log(f"Modelo clínico autoentrenado para {target} con {len(features)} variables.")
+        return True
+
+    def _run_patient_workflow(force_retrain=False):
+        if force_retrain:
+            _load_patient_dataset()
+            _preprocess_patient_dataset()
+        trained = _auto_train_patient_model()
+        if trained:
+            push_toast("Modelo clínico listo.", "success")
+        return trained
+
+    def _auto_train_inventory_model():
+        df = df_current()
+        if df is None or "resource_code" not in df.columns:
+            return False
+
+        target = "warehouse_inventory_level" if "warehouse_inventory_level" in df.columns else "_warehouse_inventory_level"
+        if target not in df.columns:
+            return False
+
+        features = [c for c in df.columns if c not in {"resource_code", target}]
+        if not features:
+            return False
+
+        model_state, global_state = build_svr_model_core(df, target, features)
+        model_results_state.set(model_state)
+        regression_model_state.set(global_state)
+        model_prediction_state.set(None)
+        add_log(f"Modelo logístico autoentrenado para {target} con {len(features)} variables.")
+        return True
+
+    def _run_inventory_workflow(force_retrain=False):
+        if force_retrain:
+            _load_inventory_dataset()
+            _preprocess_inventory_dataset()
+        trained = _auto_train_inventory_model()
+        if trained:
+            push_toast("Modelo de inventario listo.", "success")
+        return trained
 
     # ── Load default CSV on startup
     @reactive.Effect
@@ -213,40 +463,260 @@ def server(input, output, session):
 
     # ── Navigation handlers
     @reactive.Effect
+    @reactive.event(input.nav_home)
+    def _():
+        current_page.set("home")
+        
+
+    @reactive.Effect
+    @reactive.event(input.nav_patient_search, input.quick_patient)
+    def _nav_patient():
+        _load_patient_dataset()
+        _preprocess_patient_dataset()
+        current_page.set("patient_search")
+
+        if classification_model_state() is not None:
+            ui.modal_show(
+                ui.modal(
+                    "Reentrenar modelo de pacientes",
+                    ui.p("Ya existe un modelo clínico entrenado. ¿Deseas volver a entrenarlo al abrir Consulta Paciente?"),
+                    ui.div(
+                        ui.input_action_button("patient_retrain_yes", "Sí, reentrenar", class_="btn btn-primary"),
+                        ui.input_action_button("patient_retrain_no", "No, usar el actual", class_="btn btn-secondary"),
+                        class_="ctrl-row"
+                    ),
+                    easy_close=False,
+                )
+            )
+            return
+
+        _auto_train_patient_model()
+
+    @reactive.Effect
+    @reactive.event(input.nav_resource_availability, input.quick_resource)
+    def _nav_resource():
+        _load_inventory_dataset()
+        _preprocess_inventory_dataset()
+        current_page.set("resource_availability")
+
+        if regression_model_state() is not None:
+            ui.modal_show(
+                ui.modal(
+                    "Reentrenar modelo de inventario",
+                    ui.p("Ya existe un modelo de inventario entrenado. ¿Deseas volver a entrenarlo al abrir Estado de Recursos?"),
+                    ui.div(
+                        ui.input_action_button("resource_retrain_yes", "Sí, reentrenar", class_="btn btn-primary"),
+                        ui.input_action_button("resource_retrain_no", "No, usar el actual", class_="btn btn-secondary"),
+                        class_="ctrl-row"
+                    ),
+                    easy_close=False,
+                )
+            )
+            return
+
+        _auto_train_inventory_model()
+
+    @reactive.Effect
+    @reactive.event(input.patient_retrain_yes)
+    def _patient_retrain_yes():
+        ui.modal_remove()
+        _auto_train_patient_model()
+        current_page.set("patient_search")
+
+    @reactive.Effect
+    @reactive.event(input.patient_retrain_no)
+    def _patient_retrain_no():
+        ui.modal_remove()
+        current_page.set("patient_search")
+
+    @reactive.Effect
+    @reactive.event(input.resource_retrain_yes)
+    def _resource_retrain_yes():
+        ui.modal_remove()
+        _auto_train_inventory_model()
+        current_page.set("resource_availability")
+
+    @reactive.Effect
+    @reactive.event(input.resource_retrain_no)
+    def _resource_retrain_no():
+        ui.modal_remove()
+        current_page.set("resource_availability")
+
+
+    @reactive.Effect
     @reactive.event(input.nav_overview)
-    def _(): current_page.set("overview")
+    def _():
+        current_page.set("overview")
+
 
     @reactive.Effect
     @reactive.event(input.nav_eda)
-    def _(): current_page.set("eda")
+    def _():
+        current_page.set("eda")
+
+
+    @reactive.Effect
+    @reactive.event(input.nav_db_sync)
+    def _():
+        current_page.set("db_sync")
+
 
     @reactive.Effect
     @reactive.event(input.nav_missing)
-    def _(): current_page.set("missing")
+    def _():
+        current_page.set("missing")
+
 
     @reactive.Effect
     @reactive.event(input.nav_encode)
-    def _(): current_page.set("encode")
+    def _():
+        current_page.set("encode")
+
 
     @reactive.Effect
     @reactive.event(input.nav_scale)
-    def _(): current_page.set("scale")
+    def _():
+        current_page.set("scale")
+
 
     @reactive.Effect
     @reactive.event(input.nav_outlier)
-    def _(): current_page.set("outlier")
+    def _():
+        current_page.set("outlier")
+
 
     @reactive.Effect
     @reactive.event(input.nav_drop)
-    def _(): current_page.set("drop")
+    def _():
+        current_page.set("drop")
+
+
+    @reactive.Effect
+    @reactive.event(input.nav_model)
+    def _():
+        current_page.set("model")
+
 
     @reactive.Effect
     @reactive.event(input.nav_export)
-    def _(): current_page.set("export")
+    def _():
+        current_page.set("export")
+
 
     @reactive.Effect
     @reactive.event(input.nav_docs)
-    def _(): current_page.set("docs")
+    def _():
+        current_page.set("docs")
+
+
+    # ── Cambio de rol / vista ─────────────────────────────
+    @reactive.Effect
+    @reactive.event(input.user_role)
+    def _():
+        role = input.user_role()
+        current_role.set(role)
+
+        user_pages = ["home", "patient_search", "resource_availability"]
+        analyst_pages = [
+            "home",
+            "overview",
+            "eda",
+            "db_sync",
+            "missing",
+            "outlier",
+            "encode",
+            "scale",
+            "drop",
+            "model",
+            "export",
+            "docs",
+        ]
+
+        if role == "user" and current_page() not in user_pages:
+            current_page.set("home")
+
+        elif role == "analyst" and current_page() not in analyst_pages:
+            current_page.set("home")
+
+
+    # ── Botones rápidos del Home ─────────────────────────────
+    #@reactive.Effect
+    #@reactive.event(input.quick_patient)
+    #def _():
+    #    current_page.set("patient_search")
+#
+#
+    #@reactive.Effect
+    #@reactive.event(input.quick_resource)
+    #def _():
+    #    current_page.set("resource_availability")
+
+    @reactive.Effect
+    @reactive.event(input.connect_db_btn)
+    def _test_db_connection():
+        try:
+            engine = connect_bd()
+            with engine.connect() as conn:
+                pass # Si pasa esta línea, la conexión fue exitosa
+            
+            # Lanzamos la notificación de éxito
+            push_toast("¡Conexión exitosa a la base de datos ALDIMI!", "success")
+            add_log("Sistema conectado a MySQL (localhost:3310).")
+            
+        except Exception as e:
+            push_toast("Error al conectar a la BD. Revisa credenciales o Docker.", "error")
+            add_log(f"Error de conexión BD: {str(e)}")
+
+    # ── Upload data from db
+    @reactive.Effect
+    @reactive.event(input.load_patients_db)
+    def _load_patients_from_db():
+        df = _load_patient_dataset()
+        if df is not None:
+            ops_log.set([f"Dataset Clínico cargado desde BD ({df.shape[0]} filas × {df.shape[1]} cols)"])
+            push_toast("Dataset de Pacientes cargado correctamente.", "success")
+
+    @reactive.Effect
+    @reactive.event(input.load_inventory_db)
+    def _load_inventory_from_db():
+        df = _load_inventory_dataset()
+        if df is not None:
+            ops_log.set([f"Dataset Logístico cargado desde BD ({df.shape[0]} filas × {df.shape[1]} cols)"])
+            push_toast("Dataset de Inventario cargado correctamente.", "success")
+
+    @reactive.Effect
+    @reactive.event(input.preprocess_patients_db)
+    def _preprocess_patients_db():
+        result = _preprocess_patient_dataset()
+        if result is None:
+            push_toast("No hay datos de pacientes cargados para preprocesar.", "error")
+            return
+        if result["missing_cols"]:
+            add_log(
+                "Preprocesamiento pacientes: columnas no encontradas o sin valores válidos para procesar: "
+                + ", ".join(result["missing_cols"])
+            )
+        add_log(
+            "Preprocesamiento pacientes aplicado: StandardScaler en variables numéricas y LabelEncoder en variables categóricas."
+        )
+        push_toast("Pacientes preprocesados correctamente.", "success")
+    
+    @reactive.Effect
+    @reactive.event(input.preprocess_inventory_db)
+    def _preprocess_inventory_db():
+        result = _preprocess_inventory_dataset()
+        if result is None:
+            push_toast("No hay datos de inventario cargados para preprocesar.", "error")
+            return
+        if result["missing_cols"]:
+            add_log(
+                "Preprocesamiento inventario: columnas no encontradas o sin valores numéricos para escalar: "
+                + ", ".join(result["missing_cols"])
+            )
+        add_log(
+            "Preprocesamiento inventario aplicado: StandardScaler en variables numéricas y recorte de columnas finales."
+        )
+        push_toast("Inventario preprocesado correctamente.", "success")
 
     # ── Upload handlers
     @reactive.Effect
@@ -268,9 +738,12 @@ def server(input, output, session):
         toast = toast_state()
         if not toast:
             return
-        reactive.invalidate_later(3.2)
-        latest = toast_state()
-        if latest and latest.get("id") == toast.get("id"):
+        now = time.time_ns()
+        # Calculamos cuántos segundos reales han transcurrido desde que se creó el toast
+        elapsed_seconds = (now - toast.get("id", now)) / 1e9
+        if elapsed_seconds < 3.0:
+            reactive.invalidate_later(3.2)
+        else:
             toast_state.set(None)
 
     # ── Overview page: dtype change handlers
@@ -356,11 +829,25 @@ def server(input, output, session):
     # ── Register page handlers
     register_eda_handlers(input, output, df_current)
     register_missing_handlers(input, output, session, df_current, current_page, add_log)
-    register_encode_handlers(input, output, df_current, add_log)
+    register_encode_handlers(input, output, df_current, add_log, encoding_state)
     register_scale_handlers(input, output, df_current, add_log)
     register_outlier_handlers(input, output, df_current, add_log)
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
+    register_model_handlers(
+        input,
+        output,
+        df_current,
+        add_log,
+        encoding_state,
+        classification_model_state,
+        regression_model_state,
+        model_results_state,
+        model_prediction_state,
+    )    
+    register_patient_search_handlers(input,output,df_original,df_current,classification_model_state)
+    register_resource_availability_handlers(input,output,df_original,df_current,regression_model_state)
     register_export_handlers(input, output, df_current)
+    register_db_sync_handlers(input, output, session, df_current, push_toast, add_log, connect_bd)
 
     # ─────────────────────────────────────────────────────────────
     # MAIN CONTENT ROUTER
@@ -370,10 +857,18 @@ def server(input, output, session):
     def main_content():
         page = current_page()
         df = df_current()
-        if page == "overview":
+        if page == "home":
+            return render_home(df_original())
+        elif page == "overview":
             return render_overview(df, load_config, dtype_manual_state)
+        elif page == "patient_search":
+            return render_patient_search(df_original())
+        elif page == "resource_availability":
+            return render_resource_availability(df_original())
         elif page == "eda":
             return render_eda(df)
+        elif page == "db_sync":
+            return render_db_sync(df)
         elif page == "missing":
             return render_missing(df)
         elif page == "encode":
@@ -384,6 +879,8 @@ def server(input, output, session):
             return render_outlier(df)
         elif page == "drop":
             return render_drop(df)
+        elif page == "model":
+            return render_model(df)
         elif page == "export":
             return render_export(df, df_original, ops_log)
         elif page == "docs":
@@ -394,7 +891,8 @@ def server(input, output, session):
     @render.ui
     def sidebar_nav():
         page = current_page()
-        return sidebar_nav_ui(page)
+        role = current_role()
+        return sidebar_nav_ui(page, role)
 
     # ─────────────────────────────────────────────────────────────
     # SIDEBAR STATUS

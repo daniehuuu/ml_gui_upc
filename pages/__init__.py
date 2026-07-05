@@ -1,16 +1,22 @@
 """Page modules for the DataPrep Studio app"""
 
+from .home import render_home
 from .overview import render_overview
 from .eda import render_eda, register_eda_handlers
+from .db_sync import render_db_sync, register_db_sync_handlers
 from .missing import render_missing, register_missing_handlers
 from .encode import render_encode, register_encode_handlers
 from .scale import render_scale, register_scale_handlers
 from .outlier import render_outlier, register_outlier_handlers
 from .drop import render_drop, register_drop_handlers
+from .model import render_model, register_model_handlers
+from .patient_search import render_patient_search, register_patient_search_handlers
+from .resource_availability import render_resource_availability, register_resource_availability_handlers
 from .export import render_export, register_export_handlers
 from .docs import render_docs
 
 __all__ = [
+    "render_home",
     "render_overview",
     "render_eda",
     "register_eda_handlers",
@@ -24,7 +30,15 @@ __all__ = [
     "register_outlier_handlers",
     "render_drop",
     "register_drop_handlers",
+    "render_patient_search",
+    "register_patient_search_handlers",
+    "render_resource_availability",
+    "register_resource_availability_handlers",
+    "render_model",
+    "register_model_handlers",
     "render_export",
     "register_export_handlers",
     "render_docs",
+    "render_db_sync",
+    "register_db_sync_handlers"
 ]

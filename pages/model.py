@@ -1,0 +1,1609 @@
+"""Modelling page: Semi-supervised Classification + Tuned Support Vector Regression + Cross Validation"""
+
+from shiny import ui, render, reactive
+from app_helpers import get_num_cols
+
+import time
+import random
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold, cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVR
+from sklearn.semi_supervised import SelfTrainingClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    confusion_matrix,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_curve,
+    auc,
+    roc_auc_score,
+)
+from sklearn.preprocessing import LabelEncoder, label_binarize
+
+
+def _ordered_labels_from_mapping(mapping):
+    return [
+        str(label)
+        for label, encoded in sorted(mapping.items(), key=lambda item: int(item[1]))
+    ]
+
+
+def train_classification_model(df, target, features, encoding_state=None):
+    """Reusable semi-supervised classification trainer."""
+
+    start_time = time.time()
+
+    data = df[features + [target]].copy().dropna()
+    if data.empty:
+        raise ValueError("No hay datos disponibles luego de eliminar nulos.")
+
+    X = data[features].copy()
+    y = data[target].copy()
+
+    cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    if cat_features:
+        raise ValueError(f"Hay variables categóricas sin encoding: {cat_features}")
+
+    encoding_state = dict(encoding_state or {})
+    target_mapping = encoding_state.get(target, {})
+
+    if target_mapping:
+        class_names = _ordered_labels_from_mapping(target_mapping)
+        y_encoded = pd.to_numeric(y, errors="coerce")
+        if y_encoded.isna().any():
+            raise ValueError("La variable objetivo contiene valores no numéricos.")
+        y_encoded = y_encoded.astype(int).to_numpy()
+        target_encoder = LabelEncoder()
+        target_encoder.fit(class_names)
+    else:
+        target_encoder = LabelEncoder()
+        y_encoded = target_encoder.fit_transform(y.astype(str))
+        class_names = list(target_encoder.classes_)
+        target_mapping = {str(class_name): int(i) for i, class_name in enumerate(class_names)}
+        encoding_state[target] = target_mapping
+
+    class_counts = pd.Series(y_encoded).value_counts()
+    if len(class_counts) < 2:
+        raise ValueError("La variable objetivo necesita al menos 2 clases.")
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y_encoded,
+        test_size=0.2,
+        random_state=42,
+        stratify=y_encoded,
+    )
+
+    labeled_fraction = 0.25
+    rng = np.random.RandomState(42)
+    y_train_semi = np.full_like(y_train, fill_value=-1)
+
+    for class_id in np.unique(y_train):
+        class_idx = np.where(y_train == class_id)[0]
+        n_labeled = max(2, int(len(class_idx) * labeled_fraction))
+        n_labeled = min(n_labeled, len(class_idx))
+        selected_idx = rng.choice(class_idx, size=n_labeled, replace=False)
+        y_train_semi[selected_idx] = y_train[selected_idx]
+
+    labeled_count = int(np.sum(y_train_semi != -1))
+    unlabeled_count = int(np.sum(y_train_semi == -1))
+
+    labeled_mask = y_train_semi != -1
+
+    rf = RandomForestClassifier(random_state=42)
+    param_grid = {
+        "n_estimators": [200, 300],
+        "max_depth": [10, 20, None],
+        "min_samples_split": [2, 5],
+        "min_samples_leaf": [1, 2],
+    }
+
+    grid = GridSearchCV(
+        estimator=rf,
+        param_grid=param_grid,
+        scoring="f1_macro",
+        cv=3,
+        n_jobs=-1,
+        verbose=0,
+    )
+
+    grid.fit(X_train.iloc[labeled_mask], y_train_semi[labeled_mask])
+
+    best_rf = grid.best_estimator_
+    cv_f1_mean = grid.best_score_
+    cv_f1_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+    self_training_model = SelfTrainingClassifier(
+        estimator=best_rf,
+        threshold=0.75,
+        criterion="threshold",
+        max_iter=10,
+        verbose=False,
+    )
+
+    self_training_model.fit(X_train, y_train_semi)
+
+    y_pred = self_training_model.predict(X_test)
+
+    try:
+        y_proba = self_training_model.predict_proba(X_test)
+    except Exception:
+        y_proba = None
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average="macro", zero_division=0)
+    recall = recall_score(y_test, y_pred, average="macro", zero_division=0)
+    f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+
+    report_dict = classification_report(
+        y_test,
+        y_pred,
+        target_names=class_names,
+        zero_division=0,
+        output_dict=True,
+    )
+
+    cm = confusion_matrix(y_test, y_pred)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=cm,
+            x=[f"Pred: {c}" for c in class_names],
+            y=[f"Real: {c}" for c in class_names],
+            text=cm,
+            texttemplate="%{text}",
+            textfont={"color": "white", "size": 14},
+            colorscale=[
+                [0.0, "rgba(20, 28, 52, 0.95)"],
+                [0.5, "rgba(0, 180, 160, 0.55)"],
+                [1.0, "rgba(0, 255, 200, 0.95)"]
+            ],
+            colorbar=dict(title=dict(text="Casos", font=dict(color="white")))
+        )
+    )
+
+    fig.update_layout(
+        title="Matriz de Confusión",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white"),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=420,
+    )
+
+    cm_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False}
+    )
+
+    if y_proba is not None:
+        roc_html = ""
+        try:
+            y_test_bin = label_binarize(y_test, classes=list(range(len(class_names))))
+            roc_fig = go.Figure()
+            for i, class_name in enumerate(class_names):
+                fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                roc_auc = auc(fpr, tpr)
+                roc_fig.add_trace(go.Scatter(
+                    x=fpr,
+                    y=tpr,
+                    mode="lines",
+                    name=f"{class_name} - AUC {roc_auc:.3f}"
+                ))
+            roc_fig.add_trace(go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                name="Azar",
+                line=dict(dash="dash")
+            ))
+            roc_fig.update_layout(
+                title="Curva ROC multiclase One-vs-Rest",
+                xaxis_title="False Positive Rate",
+                yaxis_title="True Positive Rate",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"),
+                margin=dict(l=40, r=40, t=60, b=40),
+                height=440
+            )
+            roc_html = roc_fig.to_html(
+                full_html=False,
+                include_plotlyjs=False,
+                config={"displayModeBar": False}
+            )
+            roc_auc_macro = roc_auc_score(y_test, y_proba, multi_class="ovr", average="macro")
+        except Exception:
+            roc_html = """
+            <div class="model-info-box">
+                <p style="color: var(--accent2);">
+                    No se pudo generar la curva ROC porque el modelo no devolvió probabilidades.
+                </p>
+            </div>
+            """
+            roc_auc_macro = None
+    else:
+        roc_html = """
+        <div class="model-info-box">
+            <p style="color: var(--accent2);">
+                No se pudo generar la curva ROC porque el modelo no devolvió probabilidades.
+            </p>
+        </div>
+        """
+        roc_auc_macro = None
+
+    try:
+        importance_values = self_training_model.estimator_.feature_importances_
+    except Exception:
+        importance_values = best_rf.feature_importances_
+
+    importance_df = pd.DataFrame({
+        "Variable": features,
+        "Importancia": importance_values
+    }).sort_values(by="Importancia", ascending=False)
+
+    elapsed = int(time.time() - start_time)
+
+    model_state = {
+        "problem_type": "classification",
+        "target": target,
+        "features": features,
+        "n_rows": data.shape[0],
+        "train_rows": len(y_train),
+        "test_rows": len(y_test),
+        "labeled_fraction": labeled_fraction,
+        "labeled_count": labeled_count,
+        "unlabeled_count": unlabeled_count,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "cv_f1_mean": cv_f1_mean,
+        "cv_f1_std": cv_f1_std,
+        "best_params": grid.best_params_,
+        "report_dict": report_dict,
+        "cm_html": cm_html,
+        "roc_html": roc_html,
+        "roc_auc_macro": roc_auc_macro,
+        "importance_df": importance_df,
+        "elapsed": elapsed,
+        "best_model": self_training_model,
+        "X_test": X_test,
+        "y_test": pd.Series(y_test),
+        "class_names": class_names,
+    }
+
+    global_state = {
+        "problem_type": "classification",
+        "target": target,
+        "features": features,
+        "best_model": self_training_model,
+        "class_names": class_names,
+        "target_encoder": target_encoder,
+        "encoding_state": encoding_state,
+        "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    return model_state, global_state
+
+
+def train_svr_model(df, target, features):
+    """Reusable SVR trainer."""
+
+    start_time = time.time()
+
+    data = df[features + [target]].copy().dropna()
+    if data.empty:
+        raise ValueError("No hay datos disponibles luego de eliminar nulos.")
+
+    X = data[features].copy()
+    y = data[target].copy()
+
+    cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    if cat_features:
+        raise ValueError(f"Hay variables categóricas sin encoding: {cat_features}")
+
+    if not pd.api.types.is_numeric_dtype(y):
+        raise ValueError("Para regresión, la variable objetivo debe ser numérica.")
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+    )
+
+    max_tuning_rows = 6000
+    if len(X_train) > max_tuning_rows:
+        X_tune = X_train.sample(n=max_tuning_rows, random_state=42)
+        y_tune = y_train.loc[X_tune.index]
+        tuning_sample_used = True
+    else:
+        X_tune = X_train
+        y_tune = y_train
+        tuning_sample_used = False
+
+    svr = SVR(cache_size=1000)
+    param_grid = {
+        "kernel": ["rbf"],
+        "C": [1, 10],
+        "epsilon": [0.1, 1],
+        "gamma": ["scale"],
+    }
+
+    grid = GridSearchCV(
+        estimator=svr,
+        param_grid=param_grid,
+        scoring="neg_root_mean_squared_error",
+        cv=3,
+        n_jobs=-1,
+        verbose=0,
+    )
+    grid.fit(X_tune, y_tune)
+
+    best_params = grid.best_params_
+    cv_rmse_mean = -grid.best_score_
+    cv_rmse_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+    best_model_for_cv = SVR(**best_params, cache_size=1000)
+    cv = KFold(n_splits=3, shuffle=True, random_state=42)
+    cv_r2_scores = cross_val_score(
+        best_model_for_cv,
+        X_tune,
+        y_tune,
+        cv=cv,
+        scoring="r2",
+        n_jobs=-1,
+    )
+
+    cv_r2_mean = cv_r2_scores.mean()
+    cv_r2_std = cv_r2_scores.std()
+
+    best_model = SVR(**best_params, cache_size=1000)
+    best_model.fit(X_train, y_train)
+
+    y_pred = best_model.predict(X_test)
+    mae = mean_absolute_error(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    r2 = r2_score(y_test, y_pred)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=y_test,
+        y=y_pred,
+        mode="markers",
+        name="Predicciones",
+        marker=dict(size=7, opacity=0.7)
+    ))
+
+    min_val = min(float(np.min(y_test)), float(np.min(y_pred)))
+    max_val = max(float(np.max(y_test)), float(np.max(y_pred)))
+
+    fig.add_trace(go.Scatter(
+        x=[min_val, max_val],
+        y=[min_val, max_val],
+        mode="lines",
+        name="Predicción perfecta",
+        line=dict(dash="dash")
+    ))
+
+    fig.update_layout(
+        title="Valores reales vs predichos",
+        xaxis_title="Valor real",
+        yaxis_title="Valor predicho",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white"),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=420,
+    )
+
+    reg_plot_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False}
+    )
+
+    params_df = pd.DataFrame({
+        "Parámetro": list(best_params.keys()),
+        "Valor": [str(v) for v in best_params.values()]
+    })
+
+    elapsed = int(time.time() - start_time)
+
+    model_state = {
+        "problem_type": "regression",
+        "target": target,
+        "features": features,
+        "n_rows": data.shape[0],
+        "train_rows": len(y_train),
+        "test_rows": len(y_test),
+        "mae": mae,
+        "rmse": rmse,
+        "r2": r2,
+        "cv_rmse_mean": cv_rmse_mean,
+        "cv_rmse_std": cv_rmse_std,
+        "cv_r2_mean": cv_r2_mean,
+        "cv_r2_std": cv_r2_std,
+        "best_params": best_params,
+        "params_df": params_df,
+        "tuning_rows": len(X_tune),
+        "tuning_sample_used": tuning_sample_used,
+        "reg_plot_html": reg_plot_html,
+        "elapsed": elapsed,
+        "best_model": best_model,
+        "X_test": X_test,
+        "y_test": y_test,
+        "y_pred": y_pred,
+    }
+
+    global_state = {
+        "problem_type": "regression",
+        "target": target,
+        "features": features,
+        "best_model": best_model,
+        "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    return model_state, global_state
+
+
+def render_model(df):
+    """Render modelling page"""
+    if df is None:
+        return ui.div("Sin datos")
+
+    num_cols = get_num_cols(df)
+
+    return ui.div(
+        ui.div(
+            ui.tags.h2("Modelling", class_="section-title"),
+            ui.p(
+                "Entrenamiento de modelos semi-supervisados y de regresión con ajuste de hiperparámetros y validación cruzada.",
+                class_="section-sub"
+            )
+        ),
+
+        ui.div(
+            ui.div("CONFIGURACIÓN DEL MODELO", class_="card-title"),
+
+            ui.input_select(
+                "problem_type",
+                "Tipo de problema:",
+                choices={
+                    "classification": "Semi-supervisado - Self-Training + Random Forest",
+                    "regression": "Regresión - Support Vector Regression"
+                },
+                selected="classification"
+            ),
+
+            ui.tags.br(),
+
+            ui.input_select(
+                "target_col",
+                "Seleccione la variable objetivo:",
+                choices=list(df.columns)
+            ),
+
+            ui.input_checkbox_group(
+                "feature_cols",
+                "Seleccione las variables predictoras:",
+                choices=[],
+                selected=[]
+            ),
+
+            ui.tags.br(),
+
+            ui.input_action_button(
+                "train_model",
+                "Entrenar modelo",
+                class_="btn btn-primary"
+            ),
+
+            class_="card"
+        ),
+
+        ui.div(
+            ui.div("VARIABLES DISPONIBLES", class_="card-title"),
+            ui.HTML("".join(
+                f'<span class="pill {"pill-num" if c in num_cols else "pill-cat"}">{c}</span>'
+                for c in df.columns
+            )),
+            class_="card"
+        ),
+
+        ui.div(
+            ui.div("RESULTADOS DEL MODELO", class_="card-title"),
+            ui.output_ui("model_results"),
+            class_="card"
+        ),
+
+        ui.div(
+            ui.div("SIMULADOR EN VIVO (TEST SET)", class_="card-title"),
+            ui.p(
+                "Toma un registro aleatorio del conjunto de prueba para validar la predicción con datos no vistos por el modelo.",
+                style="color: var(--muted);"
+            ),
+            ui.input_action_button(
+                "btn_random_predict",
+                "Predicción aleatoria",
+                class_="btn btn-primary"
+            ),
+            ui.tags.br(),
+            ui.tags.br(),
+            ui.output_ui("random_prediction_ui"),
+            class_="card"
+        )
+    )
+
+
+def register_model_handlers(
+    input,
+    output,
+    df_current,
+    add_log,
+    encoding_state,
+    classification_model_state,
+    regression_model_state,
+    model_state_store=None,
+    prediction_state_store=None,
+):
+    """Register modelling page handlers"""
+
+    model_state = model_state_store or reactive.Value(None)
+    prediction_state = prediction_state_store or reactive.Value(None)
+
+    def decode_value(encoded_value, target_col, encodings, class_names=None):
+        """
+        Intenta decodificar valores codificados.
+        Sirve para targets que fueron transformados con Label/Binary Encoding.
+        """
+        value_str = str(encoded_value)
+
+        if class_names is not None:
+            try:
+                value_str = str(class_names[int(encoded_value)])
+            except Exception:
+                value_str = str(encoded_value)
+
+        if target_col in encodings:
+            reverse_map = {str(v): str(k) for k, v in encodings[target_col].items()}
+            return reverse_map.get(value_str, value_str)
+
+        return value_str
+
+    @reactive.Effect
+    def _update_feature_choices():
+        df = df_current()
+        if df is None:
+            return
+
+        target = input.target_col()
+        if not target:
+            return
+
+        features = [c for c in df.columns if c != target]
+
+        ui.update_checkbox_group(
+            "feature_cols",
+            choices=features,
+            selected=features
+        )
+
+    @reactive.Effect
+    @reactive.event(input.train_model)
+    def _train_model():
+        df = df_current()
+
+        if df is None:
+            ui.notification_show("No hay dataset cargado.", type="error")
+            return
+
+        problem_type = input.problem_type()
+        target = input.target_col()
+        features = list(input.feature_cols())
+
+        if target in features:
+            features.remove(target)
+
+        if not target:
+            ui.notification_show("Debe seleccionar una variable objetivo.", type="error")
+            return
+
+        if not features:
+            ui.notification_show("Debe seleccionar al menos una variable predictora.", type="error")
+            return
+
+        if problem_type == "classification":
+            train_classification_model(df, target, features)
+
+        elif problem_type == "regression":
+            train_svr_model(df, target, features)
+
+    def build_multiclass_roc_html(y_test, y_proba, class_names):
+        """Build multiclass ROC curve using One-vs-Rest strategy"""
+
+        try:
+            n_classes = len(class_names)
+            y_test_bin = label_binarize(y_test, classes=list(range(n_classes)))
+
+            fig = go.Figure()
+
+            for i, class_name in enumerate(class_names):
+                fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                roc_auc = auc(fpr, tpr)
+
+                fig.add_trace(go.Scatter(
+                    x=fpr,
+                    y=tpr,
+                    mode="lines",
+                    name=f"{class_name} - AUC {roc_auc:.3f}"
+                ))
+
+            fig.add_trace(go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                name="Azar",
+                line=dict(dash="dash")
+            ))
+
+            fig.update_layout(
+                title="Curva ROC multiclase One-vs-Rest",
+                xaxis_title="False Positive Rate",
+                yaxis_title="True Positive Rate",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"),
+                margin=dict(l=40, r=40, t=60, b=40),
+                height=440
+            )
+
+            return fig.to_html(
+                full_html=False,
+                include_plotlyjs=False,
+                config={"displayModeBar": False}
+            )
+
+        except Exception as e:
+            return f"""
+            <div class="model-info-box">
+                <p style="color: var(--accent2);">
+                    No se pudo generar la curva ROC: {str(e)}
+                </p>
+            </div>
+            """
+
+    def train_classification_model(df, target, features):
+        """Train semi-supervised Self-Training model with Random Forest base estimator"""
+        try:
+            start_time = time.time()
+
+            with ui.Progress(min=0, max=100) as p:
+                p.set(
+                    5,
+                    message="🤖 Entrenando modelo semi-supervisado... 5%",
+                    detail="Preparando datos"
+                )
+
+                data = df[features + [target]].copy().dropna()
+
+                if data.empty:
+                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
+                    return
+
+                X = data[features].copy()
+                y = data[target].copy()
+
+                cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+                if cat_features:
+                    ui.notification_show(
+                        f"Hay variables categóricas sin encoding: {cat_features}. Pase primero por Encoding.",
+                        type="error"
+                    )
+                    return
+
+                p.set(
+                    20,
+                    message="🤖 Entrenando modelo semi-supervisado... 20%",
+                    detail="Codificando variable objetivo"
+                )
+
+                target_encoder = LabelEncoder()
+                y_encoded = target_encoder.fit_transform(y.astype(str))
+                class_names = list(target_encoder.classes_)
+
+                class_counts = pd.Series(y_encoded).value_counts()
+                if len(class_counts) < 2:
+                    ui.notification_show("La variable objetivo necesita al menos 2 clases.", type="error")
+                    return
+
+                p.set(
+                    35,
+                    message="🤖 Entrenando modelo semi-supervisado... 35%",
+                    detail="Dividiendo train/test"
+                )
+
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X,
+                    y_encoded,
+                    test_size=0.2,
+                    random_state=42,
+                    stratify=y_encoded
+                )
+
+                p.set(
+                    45,
+                    message="🤖 Entrenando modelo semi-supervisado... 45%",
+                    detail="Simulando registros no etiquetados"
+                )
+
+                # ── Simulación semi-supervisada ─────────────────────────────
+                # Solo una fracción del conjunto de entrenamiento conserva su etiqueta.
+                # El resto se marca como -1, que representa datos no etiquetados.
+                labeled_fraction = 0.25
+                rng = np.random.RandomState(42)
+
+                y_train_semi = np.full_like(y_train, fill_value=-1)
+
+                for class_id in np.unique(y_train):
+                    class_idx = np.where(y_train == class_id)[0]
+
+                    # Mantenemos mínimo 2 etiquetas por clase para evitar que alguna clase desaparezca.
+                    n_labeled = max(2, int(len(class_idx) * labeled_fraction))
+                    n_labeled = min(n_labeled, len(class_idx))
+
+                    selected_idx = rng.choice(
+                        class_idx,
+                        size=n_labeled,
+                        replace=False
+                    )
+
+                    y_train_semi[selected_idx] = y_train[selected_idx]
+
+                labeled_count = int(np.sum(y_train_semi != -1))
+                unlabeled_count = int(np.sum(y_train_semi == -1))
+
+                p.set(
+                    60,
+                    message="🤖 Entrenando modelo semi-supervisado... 60%",
+                    detail="Ajustando Random Forest base"
+                )
+
+                labeled_mask = y_train_semi != -1
+
+                rf = RandomForestClassifier(random_state=42)
+
+                param_grid = {
+                    "n_estimators": [200, 300],
+                    "max_depth": [10, 20, None],
+                    "min_samples_split": [2, 5],
+                    "min_samples_leaf": [1, 2],
+                }
+
+                grid = GridSearchCV(
+                    estimator=rf,
+                    param_grid=param_grid,
+                    scoring="f1_macro",
+                    cv=3,
+                    n_jobs=-1,
+                    verbose=0
+                )
+
+                grid.fit(X_train.iloc[labeled_mask], y_train_semi[labeled_mask])
+
+                best_rf = grid.best_estimator_
+                cv_f1_mean = grid.best_score_
+                cv_f1_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+                p.set(
+                    75,
+                    message="🤖 Entrenando modelo semi-supervisado... 75%",
+                    detail="Ejecutando Self-Training"
+                )
+
+                self_training_model = SelfTrainingClassifier(
+                    estimator=best_rf,
+                    threshold=0.75,
+                    criterion="threshold",
+                    max_iter=10,
+                    verbose=False
+                )
+
+                self_training_model.fit(X_train, y_train_semi)
+
+                p.set(
+                    88,
+                    message="🤖 Entrenando modelo semi-supervisado... 88%",
+                    detail="Evaluando modelo en test set"
+                )
+
+                y_pred = self_training_model.predict(X_test)
+
+                try:
+                    y_proba = self_training_model.predict_proba(X_test)
+                except Exception:
+                    y_proba = None
+
+                accuracy = accuracy_score(y_test, y_pred)
+                precision = precision_score(y_test, y_pred, average="macro", zero_division=0)
+                recall = recall_score(y_test, y_pred, average="macro", zero_division=0)
+                f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+
+                report_dict = classification_report(
+                    y_test,
+                    y_pred,
+                    target_names=class_names,
+                    zero_division=0,
+                    output_dict=True
+                )
+
+                cm = confusion_matrix(y_test, y_pred)
+
+                fig = go.Figure(
+                    data=go.Heatmap(
+                        z=cm,
+                        x=[f"Pred: {c}" for c in class_names],
+                        y=[f"Real: {c}" for c in class_names],
+                        text=cm,
+                        texttemplate="%{text}",
+                        textfont={"color": "white", "size": 14},
+                        colorscale=[
+                            [0.0, "rgba(20, 28, 52, 0.95)"],
+                            [0.5, "rgba(0, 180, 160, 0.55)"],
+                            [1.0, "rgba(0, 255, 200, 0.95)"]
+                        ],
+                        colorbar=dict(title=dict(text="Casos", font=dict(color="white")))
+                    )
+                )
+
+                fig.update_layout(
+                    title="Matriz de Confusión",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="white"),
+                    margin=dict(l=40, r=40, t=60, b=40),
+                    height=420
+                )
+
+                cm_html = fig.to_html(
+                    full_html=False,
+                    include_plotlyjs=False,
+                    config={"displayModeBar": False}
+                )
+
+                if y_proba is not None:
+                    roc_html = build_multiclass_roc_html(y_test, y_proba, class_names)
+
+                    try:
+                        roc_auc_macro = roc_auc_score(
+                            y_test,
+                            y_proba,
+                            multi_class="ovr",
+                            average="macro"
+                        )
+                    except Exception:
+                        roc_auc_macro = None
+                else:
+                    roc_html = """
+                    <div class="model-info-box">
+                        <p style="color: var(--accent2);">
+                            No se pudo generar la curva ROC porque el modelo no devolvió probabilidades.
+                        </p>
+                    </div>
+                    """
+                    roc_auc_macro = None
+
+                try:
+                    base_estimator = self_training_model.estimator_
+                    importance_values = base_estimator.feature_importances_
+                except Exception:
+                    importance_values = best_rf.feature_importances_
+
+                importance_df = pd.DataFrame({
+                    "Variable": features,
+                    "Importancia": importance_values
+                }).sort_values(by="Importancia", ascending=False)
+
+                elapsed = int(time.time() - start_time)
+
+                model_state.set({
+                    "problem_type": "classification",
+                    "target": target,
+                    "features": features,
+                    "n_rows": data.shape[0],
+                    "train_rows": len(y_train),
+                    "test_rows": len(y_test),
+
+                    "labeled_fraction": labeled_fraction,
+                    "labeled_count": labeled_count,
+                    "unlabeled_count": unlabeled_count,
+
+                    "accuracy": accuracy,
+                    "precision": precision,
+                    "recall": recall,
+                    "f1": f1,
+
+                    "cv_f1_mean": cv_f1_mean,
+                    "cv_f1_std": cv_f1_std,
+
+                    "best_params": grid.best_params_,
+                    "report_dict": report_dict,
+                    "cm_html": cm_html,
+                    "roc_html": roc_html,
+                    "roc_auc_macro": roc_auc_macro,
+                    "importance_df": importance_df,
+                    "elapsed": elapsed,
+                    "best_model": self_training_model,
+                    "X_test": X_test,
+                    "y_test": pd.Series(y_test),
+                    "class_names": class_names,
+                })
+
+                classification_model_state.set({
+                    "problem_type": "classification",
+                    "target": target,
+                    "features": features,
+                    "best_model": self_training_model,
+                    "class_names": class_names,
+                    "target_encoder": target_encoder,
+                    "encoding_state": encoding_state(),
+                    "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+                add_log(
+                    f"Modelo semi-supervisado global guardado: {target} | "
+                    f"Features: {len(features)}"
+                )
+
+                prediction_state.set(None)
+
+                p.set(
+                    100,
+                    message="✅ Modelo semi-supervisado entrenado 100%",
+                    detail=f"Tiempo total: {elapsed}s"
+                )
+
+            add_log(
+                f"Self-Training + Random Forest entrenado | "
+                f"F1 Test: {f1:.4f} | "
+                f"CV F1 RF base: {cv_f1_mean:.4f} ± {cv_f1_std:.4f}"
+            )
+
+            ui.notification_show(
+                "Modelo semi-supervisado entrenado correctamente.",
+                type="success"
+            )
+
+        except Exception as e:
+            add_log(f"Error en clasificación semi-supervisada: {str(e)}")
+            ui.notification_show(
+                f"Error al entrenar clasificación semi-supervisada: {str(e)}",
+                type="error"
+            )
+
+    def train_svr_model(df, target, features):
+        """Train Support Vector Regression with GridSearchCV tuning"""
+        try:
+            start_time = time.time()
+
+            with ui.Progress(min=0, max=100) as p:
+                p.set(10, message="📈 Entrenando SVR... 10%", detail="Preparando datos")
+
+                data = df[features + [target]].copy().dropna()
+
+                if data.empty:
+                    ui.notification_show("No hay datos disponibles luego de eliminar nulos.", type="error")
+                    return
+
+                X = data[features].copy()
+                y = data[target].copy()
+
+                cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+                if cat_features:
+                    ui.notification_show(
+                        f"Hay variables categóricas sin encoding: {cat_features}. Pase primero por Encoding.",
+                        type="error"
+                    )
+                    return
+
+                if not pd.api.types.is_numeric_dtype(y):
+                    ui.notification_show(
+                        "Para regresión, la variable objetivo debe ser numérica.",
+                        type="error"
+                    )
+                    return
+
+                p.set(25, message="📈 Entrenando SVR... 25%", detail="Dividiendo train/test")
+
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X,
+                    y,
+                    test_size=0.2,
+                    random_state=42
+                )
+
+                p.set(40, message="📈 Entrenando SVR... 40%", detail="Preparando muestra para tuning")
+
+                # SVR con kernel RBF puede ser pesado en datasets grandes.
+                # Para evitar que la app se congele, GridSearchCV se ejecuta sobre una muestra.
+                max_tuning_rows = 6000
+
+                if len(X_train) > max_tuning_rows:
+                    X_tune = X_train.sample(
+                        n=max_tuning_rows,
+                        random_state=42
+                    )
+                    y_tune = y_train.loc[X_tune.index]
+                    tuning_sample_used = True
+                else:
+                    X_tune = X_train
+                    y_tune = y_train
+                    tuning_sample_used = False
+
+                p.set(55, message="📈 Entrenando SVR... 55%", detail="Ejecutando GridSearchCV")
+
+                svr = SVR(cache_size=1000)
+
+                param_grid = {
+                    "kernel": ["rbf"],
+                    "C": [1, 10],
+                    "epsilon": [0.1, 1],
+                    "gamma": ["scale"],
+                }
+
+                grid = GridSearchCV(
+                    estimator=svr,
+                    param_grid=param_grid,
+                    scoring="neg_root_mean_squared_error",
+                    cv=3,
+                    n_jobs=-1,
+                    verbose=0
+                )
+
+                grid.fit(X_tune, y_tune)
+
+                best_params = grid.best_params_
+                cv_rmse_mean = -grid.best_score_
+                cv_rmse_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+                p.set(70, message="📈 Entrenando SVR... 70%", detail="Calculando CV R²")
+
+                best_model_for_cv = SVR(
+                    **best_params,
+                    cache_size=1000
+                )
+
+                cv = KFold(n_splits=3, shuffle=True, random_state=42)
+
+                cv_r2_scores = cross_val_score(
+                    best_model_for_cv,
+                    X_tune,
+                    y_tune,
+                    cv=cv,
+                    scoring="r2",
+                    n_jobs=-1
+                )
+
+                cv_r2_mean = cv_r2_scores.mean()
+                cv_r2_std = cv_r2_scores.std()
+
+                p.set(82, message="📈 Entrenando SVR... 82%", detail="Entrenando mejor modelo con train completo")
+
+                best_model = SVR(
+                    **best_params,
+                    cache_size=1000
+                )
+
+                best_model.fit(X_train, y_train)
+
+                p.set(90, message="📈 Entrenando SVR... 90%", detail="Evaluando modelo en test set")
+
+                y_pred = best_model.predict(X_test)
+
+                mae = mean_absolute_error(y_test, y_pred)
+                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+                r2 = r2_score(y_test, y_pred)
+
+                fig = go.Figure()
+
+                fig.add_trace(go.Scatter(
+                    x=y_test,
+                    y=y_pred,
+                    mode="markers",
+                    name="Predicciones",
+                    marker=dict(size=7, opacity=0.7)
+                ))
+
+                min_val = min(float(np.min(y_test)), float(np.min(y_pred)))
+                max_val = max(float(np.max(y_test)), float(np.max(y_pred)))
+
+                fig.add_trace(go.Scatter(
+                    x=[min_val, max_val],
+                    y=[min_val, max_val],
+                    mode="lines",
+                    name="Predicción perfecta",
+                    line=dict(dash="dash")
+                ))
+
+                fig.update_layout(
+                    title="Valores reales vs predichos",
+                    xaxis_title="Valor real",
+                    yaxis_title="Valor predicho",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="white"),
+                    margin=dict(l=40, r=40, t=60, b=40),
+                    height=420
+                )
+
+                reg_plot_html = fig.to_html(
+                    full_html=False,
+                    include_plotlyjs=False,
+                    config={"displayModeBar": False}
+                )
+
+                params_df = pd.DataFrame({
+                    "Parámetro": list(best_params.keys()),
+                    "Valor": [str(v) for v in best_params.values()]
+                })
+
+                elapsed = int(time.time() - start_time)
+
+                model_state.set({
+                    "problem_type": "regression",
+                    "target": target,
+                    "features": features,
+                    "n_rows": data.shape[0],
+                    "train_rows": len(y_train),
+                    "test_rows": len(y_test),
+
+                    "mae": mae,
+                    "rmse": rmse,
+                    "r2": r2,
+
+                    "cv_rmse_mean": cv_rmse_mean,
+                    "cv_rmse_std": cv_rmse_std,
+                    "cv_r2_mean": cv_r2_mean,
+                    "cv_r2_std": cv_r2_std,
+
+                    "best_params": best_params,
+                    "params_df": params_df,
+                    "tuning_rows": len(X_tune),
+                    "tuning_sample_used": tuning_sample_used,
+
+                    "reg_plot_html": reg_plot_html,
+                    "elapsed": elapsed,
+                    "best_model": best_model,
+                    "X_test": X_test,
+                    "y_test": y_test,
+                    "y_pred": y_pred,
+                })
+
+                regression_model_state.set({
+                    "problem_type": "regression",
+                    "target": target,
+                    "features": features,
+                    "best_model": best_model,
+                    "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+                prediction_state.set(None)
+
+                p.set(100, message="✅ SVR entrenado 100%", detail=f"Tiempo total: {elapsed}s")
+
+            add_log(
+                f"Support Vector Regression entrenado con GridSearchCV | "
+                f"RMSE Test: {rmse:.4f} | CV RMSE: {cv_rmse_mean:.4f} ± {cv_rmse_std:.4f} | "
+                f"CV R²: {cv_r2_mean:.4f} ± {cv_r2_std:.4f} | Best params: {best_params}"
+            )
+
+            ui.notification_show("Modelo SVR con tuning entrenado correctamente.", type="success")
+
+        except Exception as e:
+            add_log(f"Error en Support Vector Regression: {str(e)}")
+            ui.notification_show(f"Error al entrenar SVR: {str(e)}", type="error")
+
+    @output
+    @render.ui
+    def model_results():
+        state = model_state()
+
+        if state is None:
+            return ui.p(
+                "Aún no se ha entrenado ningún modelo.",
+                style="color: var(--muted);"
+            )
+
+        if state["problem_type"] == "classification":
+            return render_classification_results(state)
+
+        if state["problem_type"] == "regression":
+            return render_regression_results(state)
+
+        return ui.div("Tipo de modelo no reconocido.")
+
+    def render_classification_results(state):
+        roc_auc_value = state.get("roc_auc_macro")
+        roc_auc_text = f"{roc_auc_value:.4f}" if roc_auc_value is not None else "N/A"
+
+        metrics_html = f"""
+        <div class="metric-grid">
+            <div class="metric-card">
+                <div class="metric-value">{state['accuracy']:.4f}</div>
+                <div class="metric-label">Accuracy Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['precision']:.4f}</div>
+                <div class="metric-label">Precision Macro</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['recall']:.4f}</div>
+                <div class="metric-label">Recall Macro</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['f1']:.4f}</div>
+                <div class="metric-label">F1 Macro Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['cv_f1_mean']:.4f}</div>
+                <div class="metric-label">CV F1 RF Base</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{roc_auc_text}</div>
+                <div class="metric-label">ROC AUC Macro</div>
+            </div>
+        </div>
+        """
+
+        params_html = "".join(
+            f"<li><b>{k}</b>: {v}</li>" for k, v in state["best_params"].items()
+        )
+
+        importance_rows = "".join(
+            f"<tr><td>{row['Variable']}</td><td>{row['Importancia']:.4f}</td></tr>"
+            for _, row in state["importance_df"].iterrows()
+        )
+
+        report_rows = ""
+        for label, values in state["report_dict"].items():
+            if isinstance(values, dict):
+                report_rows += f"""
+                <tr>
+                    <td>{label}</td>
+                    <td>{values.get('precision', 0):.4f}</td>
+                    <td>{values.get('recall', 0):.4f}</td>
+                    <td>{values.get('f1-score', 0):.4f}</td>
+                    <td>{values.get('support', 0):.0f}</td>
+                </tr>
+                """
+            else:
+                report_rows += f"""
+                <tr>
+                    <td>{label}</td>
+                    <td colspan="3">{values:.4f}</td>
+                    <td>-</td>
+                </tr>
+                """
+
+        return ui.div(
+            ui.HTML(metrics_html),
+
+            ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
+            ui.div(
+                ui.p("Tipo de modelo: Self-Training + Random Forest Classifier"),
+                ui.p("Enfoque: Semi-supervisado"),
+                ui.p(f"Variable objetivo: {state['target']}"),
+                ui.p(f"Registros usados: {state['n_rows']}"),
+                ui.p(f"Entrenamiento: {state['train_rows']} registros"),
+                ui.p(f"Prueba: {state['test_rows']} registros"),
+                ui.p(f"Porcentaje etiquetado inicial: {state['labeled_fraction'] * 100:.0f}%"),
+                ui.p(f"Registros etiquetados iniciales: {state['labeled_count']}"),
+                ui.p(f"Registros no etiquetados iniciales: {state['unlabeled_count']}"),
+                ui.p("Ajuste de hiperparámetros: GridSearchCV sobre Random Forest base"),
+                ui.p("Validación cruzada: 3-fold CV sobre los datos inicialmente etiquetados"),
+                ui.p("Pseudo-etiquetado: Self-Training con threshold de confianza 0.75"),
+                ui.p(f"CV F1 Macro promedio del RF base: {state['cv_f1_mean']:.4f} ± {state['cv_f1_std']:.4f}"),
+                ui.p(f"ROC AUC Macro: {roc_auc_text}"),
+                ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
+                class_="model-info-box"
+            ),
+
+            ui.tags.h4("Mejores hiperparámetros del Random Forest base", class_="model-subtitle"),
+            ui.HTML(f"<div class='model-info-box'><ul>{params_html}</ul></div>"),
+
+            ui.tags.h4("Matriz de confusión", class_="model-subtitle"),
+            ui.HTML(state["cm_html"]),
+
+            ui.tags.h4("Curva ROC multiclase", class_="model-subtitle"),
+            ui.HTML(state["roc_html"]),
+
+            ui.tags.h4("Importancia de variables", class_="model-subtitle"),
+            ui.HTML(f"""
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Variable</th>
+                            <th>Importancia</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {importance_rows}
+                    </tbody>
+                </table>
+            """),
+
+            ui.tags.h4("Reporte de clasificación", class_="model-subtitle"),
+            ui.HTML(f"""
+                <table class="data-table classification-table">
+                    <thead>
+                        <tr>
+                            <th>Clase / Métrica</th>
+                            <th>Precision</th>
+                            <th>Recall</th>
+                            <th>F1-score</th>
+                            <th>Support</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {report_rows}
+                    </tbody>
+                </table>
+            """),
+
+            ui.div(
+                ui.p(
+                    "Interpretación: el modelo usa un enfoque semi-supervisado mediante Self-Training. "
+                    "Primero se entrena un Random Forest con una fracción de datos etiquetados y luego se generan "
+                    "pseudo-etiquetas para registros inicialmente no etiquetados cuando el modelo alcanza suficiente confianza. "
+                    "La curva ROC se calcula con un esquema One-vs-Rest para comparar la capacidad de separación entre clases.",
+                    style="color: var(--muted); margin-top: 10px;"
+                ),
+                class_="model-info-box"
+            )
+        )
+
+    def render_regression_results(state):
+        metrics_html = f"""
+        <div class="metric-grid">
+            <div class="metric-card">
+                <div class="metric-value">{state['mae']:.4f}</div>
+                <div class="metric-label">MAE Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['rmse']:.4f}</div>
+                <div class="metric-label">RMSE Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['r2']:.4f}</div>
+                <div class="metric-label">R² Test</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['cv_rmse_mean']:.4f}</div>
+                <div class="metric-label">CV RMSE</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{state['cv_r2_mean']:.4f}</div>
+                <div class="metric-label">CV R²</div>
+            </div>
+        </div>
+        """
+
+        params_rows = "".join(
+            f"<tr><td>{row['Parámetro']}</td><td>{row['Valor']}</td></tr>"
+            for _, row in state["params_df"].iterrows()
+        )
+
+        sample_text = "Sí" if state.get("tuning_sample_used") else "No"
+
+        return ui.div(
+            ui.HTML(metrics_html),
+
+            ui.tags.h4("Resumen del entrenamiento", class_="model-subtitle"),
+            ui.div(
+                ui.p("Tipo de modelo: Support Vector Regression (SVR)"),
+                ui.p(f"Variable objetivo: {state['target']}"),
+                ui.p(f"Registros usados: {state['n_rows']}"),
+                ui.p(f"Entrenamiento: {state['train_rows']} registros"),
+                ui.p(f"Prueba: {state['test_rows']} registros"),
+                ui.p("Ajuste de hiperparámetros: GridSearchCV"),
+                ui.p("Validación cruzada: 3-fold CV"),
+                ui.p(f"Registros usados para tuning: {state['tuning_rows']}"),
+                ui.p(f"Tuning con muestra: {sample_text}"),
+                ui.p(f"CV RMSE promedio: {state['cv_rmse_mean']:.4f} ± {state['cv_rmse_std']:.4f}"),
+                ui.p(f"CV R² promedio: {state['cv_r2_mean']:.4f} ± {state['cv_r2_std']:.4f}"),
+                ui.p(f"Tiempo total de entrenamiento: {state['elapsed']} segundos"),
+                class_="model-info-box"
+            ),
+
+            ui.tags.h4("Mejores hiperparámetros", class_="model-subtitle"),
+            ui.HTML(f"""
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Parámetro</th>
+                            <th>Valor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {params_rows}
+                    </tbody>
+                </table>
+            """),
+
+            ui.tags.h4("Valores reales vs predichos", class_="model-subtitle"),
+            ui.HTML(state["reg_plot_html"]),
+
+            ui.div(
+                ui.p(
+                    "Interpretación: SVR busca una función que aproxime la variable objetivo manteniendo "
+                    "un margen de tolerancia. El kernel RBF permite modelar relaciones no lineales. "
+                    "A diferencia de la regresión lineal, SVR no entrega coeficientes directamente interpretables "
+                    "por variable.",
+                    style="color: var(--muted); margin-top: 10px;"
+                ),
+                class_="model-info-box"
+            )
+        )
+
+    @reactive.Effect
+    @reactive.event(input.btn_random_predict)
+    def _do_random_predict():
+        state = model_state()
+
+        if state is None or "best_model" not in state:
+            ui.notification_show("Primero debes entrenar el modelo.", type="warning")
+            return
+
+        if state["problem_type"] == "classification":
+            random_classification_prediction(state)
+
+        elif state["problem_type"] == "regression":
+            random_regression_prediction(state)
+
+    def random_classification_prediction(state):
+        X_test = state["X_test"]
+        y_test = state["y_test"]
+        best_model = state["best_model"]
+        target_col = state["target"]
+        class_names = state["class_names"]
+
+        random_idx = random.randint(0, len(X_test) - 1)
+        sample_X = X_test.iloc[[random_idx]]
+
+        true_y_encoded = y_test.iloc[random_idx] if isinstance(y_test, pd.Series) else y_test[random_idx]
+        pred_encoded = best_model.predict(sample_X)[0]
+
+        try:
+            probs = best_model.predict_proba(sample_X)[0]
+            confidence = round(max(probs) * 100, 2)
+        except Exception:
+            confidence = None
+
+        encodings = encoding_state()
+
+        true_label_text = decode_value(true_y_encoded, target_col, encodings, class_names)
+        pred_label_text = decode_value(pred_encoded, target_col, encodings, class_names)
+
+        prediction_state.set({
+            "problem_type": "classification",
+            "features_dict": sample_X.iloc[0].round(4).to_dict(),
+            "true_label": true_label_text,
+            "pred_label": pred_label_text,
+            "confidence": confidence
+        })
+
+    def random_regression_prediction(state):
+        X_test = state["X_test"]
+        y_test = state["y_test"]
+        best_model = state["best_model"]
+
+        random_idx = random.randint(0, len(X_test) - 1)
+        sample_X = X_test.iloc[[random_idx]]
+
+        true_value = y_test.iloc[random_idx] if isinstance(y_test, pd.Series) else y_test[random_idx]
+        pred_value = best_model.predict(sample_X)[0]
+        abs_error = abs(true_value - pred_value)
+
+        prediction_state.set({
+            "problem_type": "regression",
+            "features_dict": sample_X.iloc[0].round(4).to_dict(),
+            "true_value": round(float(true_value), 4),
+            "pred_value": round(float(pred_value), 4),
+            "abs_error": round(float(abs_error), 4)
+        })
+
+    @output
+    @render.ui
+    def random_prediction_ui():
+        p_state = prediction_state()
+
+        if p_state is None:
+            return ui.div()
+
+        if p_state["problem_type"] == "classification":
+            return render_random_classification_prediction(p_state)
+
+        if p_state["problem_type"] == "regression":
+            return render_random_regression_prediction(p_state)
+
+        return ui.div()
+
+    def render_random_classification_prediction(p_state):
+        true_label = p_state["true_label"]
+        pred_label = p_state["pred_label"]
+        confidence = p_state["confidence"]
+
+        is_correct = str(true_label) == str(pred_label)
+        status_text = "Correcto" if is_correct else "Incorrecto"
+        status_color = "var(--accent)" if is_correct else "var(--accent2)"
+
+        if confidence is None:
+            confidence_text = "No disponible"
+        else:
+            confidence_text = f"{confidence}%"
+
+        feature_rows = "".join(
+            f"<tr><td>{k}</td><td>{v}</td></tr>"
+            for k, v in p_state["features_dict"].items()
+        )
+
+        return ui.HTML(f"""
+            <div class="model-info-box">
+                <h4 style="color:{status_color};">Resultado: {status_text}</h4>
+                <p><b>Valor real:</b> {true_label}</p>
+                <p><b>Predicción:</b> {pred_label}</p>
+                <p><b>Confianza:</b> {confidence_text}</p>
+            </div>
+
+            <h4 class="model-subtitle">Variables del registro evaluado</h4>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Variable</th>
+                        <th>Valor</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {feature_rows}
+                </tbody>
+            </table>
+        """)
+
+    def render_random_regression_prediction(p_state):
+        feature_rows = "".join(
+            f"<tr><td>{k}</td><td>{v}</td></tr>"
+            for k, v in p_state["features_dict"].items()
+        )
+
+        return ui.HTML(f"""
+            <div class="model-info-box">
+                <h4 style="color:var(--accent);">Predicción con Support Vector Regression</h4>
+                <p><b>Valor real:</b> {p_state['true_value']}</p>
+                <p><b>Valor predicho:</b> {p_state['pred_value']}</p>
+                <p><b>Error absoluto:</b> {p_state['abs_error']}</p>
+            </div>
+
+            <h4 class="model-subtitle">Variables del registro evaluado</h4>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Variable</th>
+                        <th>Valor</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {feature_rows}
+                </tbody>
+            </table>
+        """)
