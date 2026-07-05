@@ -30,6 +30,434 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder, label_binarize
 
 
+def _ordered_labels_from_mapping(mapping):
+    return [
+        str(label)
+        for label, encoded in sorted(mapping.items(), key=lambda item: int(item[1]))
+    ]
+
+
+def train_classification_model(df, target, features, encoding_state=None):
+    """Reusable semi-supervised classification trainer."""
+
+    start_time = time.time()
+
+    data = df[features + [target]].copy().dropna()
+    if data.empty:
+        raise ValueError("No hay datos disponibles luego de eliminar nulos.")
+
+    X = data[features].copy()
+    y = data[target].copy()
+
+    cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    if cat_features:
+        raise ValueError(f"Hay variables categóricas sin encoding: {cat_features}")
+
+    encoding_state = dict(encoding_state or {})
+    target_mapping = encoding_state.get(target, {})
+
+    if target_mapping:
+        class_names = _ordered_labels_from_mapping(target_mapping)
+        y_encoded = pd.to_numeric(y, errors="coerce")
+        if y_encoded.isna().any():
+            raise ValueError("La variable objetivo contiene valores no numéricos.")
+        y_encoded = y_encoded.astype(int).to_numpy()
+        target_encoder = LabelEncoder()
+        target_encoder.fit(class_names)
+    else:
+        target_encoder = LabelEncoder()
+        y_encoded = target_encoder.fit_transform(y.astype(str))
+        class_names = list(target_encoder.classes_)
+        target_mapping = {str(class_name): int(i) for i, class_name in enumerate(class_names)}
+        encoding_state[target] = target_mapping
+
+    class_counts = pd.Series(y_encoded).value_counts()
+    if len(class_counts) < 2:
+        raise ValueError("La variable objetivo necesita al menos 2 clases.")
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y_encoded,
+        test_size=0.2,
+        random_state=42,
+        stratify=y_encoded,
+    )
+
+    labeled_fraction = 0.25
+    rng = np.random.RandomState(42)
+    y_train_semi = np.full_like(y_train, fill_value=-1)
+
+    for class_id in np.unique(y_train):
+        class_idx = np.where(y_train == class_id)[0]
+        n_labeled = max(2, int(len(class_idx) * labeled_fraction))
+        n_labeled = min(n_labeled, len(class_idx))
+        selected_idx = rng.choice(class_idx, size=n_labeled, replace=False)
+        y_train_semi[selected_idx] = y_train[selected_idx]
+
+    labeled_count = int(np.sum(y_train_semi != -1))
+    unlabeled_count = int(np.sum(y_train_semi == -1))
+
+    labeled_mask = y_train_semi != -1
+
+    rf = RandomForestClassifier(random_state=42)
+    param_grid = {
+        "n_estimators": [200, 300],
+        "max_depth": [10, 20, None],
+        "min_samples_split": [2, 5],
+        "min_samples_leaf": [1, 2],
+    }
+
+    grid = GridSearchCV(
+        estimator=rf,
+        param_grid=param_grid,
+        scoring="f1_macro",
+        cv=3,
+        n_jobs=-1,
+        verbose=0,
+    )
+
+    grid.fit(X_train.iloc[labeled_mask], y_train_semi[labeled_mask])
+
+    best_rf = grid.best_estimator_
+    cv_f1_mean = grid.best_score_
+    cv_f1_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+    self_training_model = SelfTrainingClassifier(
+        estimator=best_rf,
+        threshold=0.75,
+        criterion="threshold",
+        max_iter=10,
+        verbose=False,
+    )
+
+    self_training_model.fit(X_train, y_train_semi)
+
+    y_pred = self_training_model.predict(X_test)
+
+    try:
+        y_proba = self_training_model.predict_proba(X_test)
+    except Exception:
+        y_proba = None
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average="macro", zero_division=0)
+    recall = recall_score(y_test, y_pred, average="macro", zero_division=0)
+    f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+
+    report_dict = classification_report(
+        y_test,
+        y_pred,
+        target_names=class_names,
+        zero_division=0,
+        output_dict=True,
+    )
+
+    cm = confusion_matrix(y_test, y_pred)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=cm,
+            x=[f"Pred: {c}" for c in class_names],
+            y=[f"Real: {c}" for c in class_names],
+            text=cm,
+            texttemplate="%{text}",
+            textfont={"color": "white", "size": 14},
+            colorscale=[
+                [0.0, "rgba(20, 28, 52, 0.95)"],
+                [0.5, "rgba(0, 180, 160, 0.55)"],
+                [1.0, "rgba(0, 255, 200, 0.95)"]
+            ],
+            colorbar=dict(title=dict(text="Casos", font=dict(color="white")))
+        )
+    )
+
+    fig.update_layout(
+        title="Matriz de Confusión",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white"),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=420,
+    )
+
+    cm_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False}
+    )
+
+    if y_proba is not None:
+        roc_html = ""
+        try:
+            y_test_bin = label_binarize(y_test, classes=list(range(len(class_names))))
+            roc_fig = go.Figure()
+            for i, class_name in enumerate(class_names):
+                fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                roc_auc = auc(fpr, tpr)
+                roc_fig.add_trace(go.Scatter(
+                    x=fpr,
+                    y=tpr,
+                    mode="lines",
+                    name=f"{class_name} - AUC {roc_auc:.3f}"
+                ))
+            roc_fig.add_trace(go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                name="Azar",
+                line=dict(dash="dash")
+            ))
+            roc_fig.update_layout(
+                title="Curva ROC multiclase One-vs-Rest",
+                xaxis_title="False Positive Rate",
+                yaxis_title="True Positive Rate",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"),
+                margin=dict(l=40, r=40, t=60, b=40),
+                height=440
+            )
+            roc_html = roc_fig.to_html(
+                full_html=False,
+                include_plotlyjs=False,
+                config={"displayModeBar": False}
+            )
+            roc_auc_macro = roc_auc_score(y_test, y_proba, multi_class="ovr", average="macro")
+        except Exception:
+            roc_html = """
+            <div class="model-info-box">
+                <p style="color: var(--accent2);">
+                    No se pudo generar la curva ROC porque el modelo no devolvió probabilidades.
+                </p>
+            </div>
+            """
+            roc_auc_macro = None
+    else:
+        roc_html = """
+        <div class="model-info-box">
+            <p style="color: var(--accent2);">
+                No se pudo generar la curva ROC porque el modelo no devolvió probabilidades.
+            </p>
+        </div>
+        """
+        roc_auc_macro = None
+
+    try:
+        importance_values = self_training_model.estimator_.feature_importances_
+    except Exception:
+        importance_values = best_rf.feature_importances_
+
+    importance_df = pd.DataFrame({
+        "Variable": features,
+        "Importancia": importance_values
+    }).sort_values(by="Importancia", ascending=False)
+
+    elapsed = int(time.time() - start_time)
+
+    model_state = {
+        "problem_type": "classification",
+        "target": target,
+        "features": features,
+        "n_rows": data.shape[0],
+        "train_rows": len(y_train),
+        "test_rows": len(y_test),
+        "labeled_fraction": labeled_fraction,
+        "labeled_count": labeled_count,
+        "unlabeled_count": unlabeled_count,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "cv_f1_mean": cv_f1_mean,
+        "cv_f1_std": cv_f1_std,
+        "best_params": grid.best_params_,
+        "report_dict": report_dict,
+        "cm_html": cm_html,
+        "roc_html": roc_html,
+        "roc_auc_macro": roc_auc_macro,
+        "importance_df": importance_df,
+        "elapsed": elapsed,
+        "best_model": self_training_model,
+        "X_test": X_test,
+        "y_test": pd.Series(y_test),
+        "class_names": class_names,
+    }
+
+    global_state = {
+        "problem_type": "classification",
+        "target": target,
+        "features": features,
+        "best_model": self_training_model,
+        "class_names": class_names,
+        "target_encoder": target_encoder,
+        "encoding_state": encoding_state,
+        "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    return model_state, global_state
+
+
+def train_svr_model(df, target, features):
+    """Reusable SVR trainer."""
+
+    start_time = time.time()
+
+    data = df[features + [target]].copy().dropna()
+    if data.empty:
+        raise ValueError("No hay datos disponibles luego de eliminar nulos.")
+
+    X = data[features].copy()
+    y = data[target].copy()
+
+    cat_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    if cat_features:
+        raise ValueError(f"Hay variables categóricas sin encoding: {cat_features}")
+
+    if not pd.api.types.is_numeric_dtype(y):
+        raise ValueError("Para regresión, la variable objetivo debe ser numérica.")
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+    )
+
+    max_tuning_rows = 6000
+    if len(X_train) > max_tuning_rows:
+        X_tune = X_train.sample(n=max_tuning_rows, random_state=42)
+        y_tune = y_train.loc[X_tune.index]
+        tuning_sample_used = True
+    else:
+        X_tune = X_train
+        y_tune = y_train
+        tuning_sample_used = False
+
+    svr = SVR(cache_size=1000)
+    param_grid = {
+        "kernel": ["rbf"],
+        "C": [1, 10],
+        "epsilon": [0.1, 1],
+        "gamma": ["scale"],
+    }
+
+    grid = GridSearchCV(
+        estimator=svr,
+        param_grid=param_grid,
+        scoring="neg_root_mean_squared_error",
+        cv=3,
+        n_jobs=-1,
+        verbose=0,
+    )
+    grid.fit(X_tune, y_tune)
+
+    best_params = grid.best_params_
+    cv_rmse_mean = -grid.best_score_
+    cv_rmse_std = grid.cv_results_["std_test_score"][grid.best_index_]
+
+    best_model_for_cv = SVR(**best_params, cache_size=1000)
+    cv = KFold(n_splits=3, shuffle=True, random_state=42)
+    cv_r2_scores = cross_val_score(
+        best_model_for_cv,
+        X_tune,
+        y_tune,
+        cv=cv,
+        scoring="r2",
+        n_jobs=-1,
+    )
+
+    cv_r2_mean = cv_r2_scores.mean()
+    cv_r2_std = cv_r2_scores.std()
+
+    best_model = SVR(**best_params, cache_size=1000)
+    best_model.fit(X_train, y_train)
+
+    y_pred = best_model.predict(X_test)
+    mae = mean_absolute_error(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    r2 = r2_score(y_test, y_pred)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=y_test,
+        y=y_pred,
+        mode="markers",
+        name="Predicciones",
+        marker=dict(size=7, opacity=0.7)
+    ))
+
+    min_val = min(float(np.min(y_test)), float(np.min(y_pred)))
+    max_val = max(float(np.max(y_test)), float(np.max(y_pred)))
+
+    fig.add_trace(go.Scatter(
+        x=[min_val, max_val],
+        y=[min_val, max_val],
+        mode="lines",
+        name="Predicción perfecta",
+        line=dict(dash="dash")
+    ))
+
+    fig.update_layout(
+        title="Valores reales vs predichos",
+        xaxis_title="Valor real",
+        yaxis_title="Valor predicho",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white"),
+        margin=dict(l=40, r=40, t=60, b=40),
+        height=420,
+    )
+
+    reg_plot_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False}
+    )
+
+    params_df = pd.DataFrame({
+        "Parámetro": list(best_params.keys()),
+        "Valor": [str(v) for v in best_params.values()]
+    })
+
+    elapsed = int(time.time() - start_time)
+
+    model_state = {
+        "problem_type": "regression",
+        "target": target,
+        "features": features,
+        "n_rows": data.shape[0],
+        "train_rows": len(y_train),
+        "test_rows": len(y_test),
+        "mae": mae,
+        "rmse": rmse,
+        "r2": r2,
+        "cv_rmse_mean": cv_rmse_mean,
+        "cv_rmse_std": cv_rmse_std,
+        "cv_r2_mean": cv_r2_mean,
+        "cv_r2_std": cv_r2_std,
+        "best_params": best_params,
+        "params_df": params_df,
+        "tuning_rows": len(X_tune),
+        "tuning_sample_used": tuning_sample_used,
+        "reg_plot_html": reg_plot_html,
+        "elapsed": elapsed,
+        "best_model": best_model,
+        "X_test": X_test,
+        "y_test": y_test,
+        "y_pred": y_pred,
+    }
+
+    global_state = {
+        "problem_type": "regression",
+        "target": target,
+        "features": features,
+        "best_model": best_model,
+        "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    return model_state, global_state
+
+
 def render_model(df):
     """Render modelling page"""
     if df is None:
@@ -126,12 +554,14 @@ def register_model_handlers(
     add_log,
     encoding_state,
     classification_model_state,
-    regression_model_state
+    regression_model_state,
+    model_state_store=None,
+    prediction_state_store=None,
 ):
     """Register modelling page handlers"""
 
-    model_state = reactive.Value(None)
-    prediction_state = reactive.Value(None)
+    model_state = model_state_store or reactive.Value(None)
+    prediction_state = prediction_state_store or reactive.Value(None)
 
     def decode_value(encoded_value, target_col, encodings, class_names=None):
         """

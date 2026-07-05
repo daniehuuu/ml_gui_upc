@@ -43,6 +43,10 @@ from pages import (
     render_db_sync,
     register_db_sync_handlers
 )
+from pages.model import (
+    train_classification_model as build_classification_model_core,
+    train_svr_model as build_svr_model_core,
+)
 
 # ─── UI ────────────────────────────────────────────────────────────────────
 app_ui = ui.page_fluid(
@@ -110,6 +114,8 @@ def server(input, output, session):
     # Estados globales para compartir modelos entre páginas
     classification_model_state = reactive.Value(None)
     regression_model_state = reactive.Value(None)
+    model_results_state = reactive.Value(None)
+    model_prediction_state = reactive.Value(None)
 
     # ── Helper Functions
     def resolve_separator():
@@ -246,6 +252,184 @@ def server(input, output, session):
                 print(f"Error auto-carga BD Inventario: {e}")
                 push_toast("Error al conectar con la red logística.", "error")
 
+    def _load_patient_dataset():
+        try:
+            engine = connect_bd()
+            new_df = pd.read_sql("SELECT * FROM pacientes", engine)
+            df_original.set(new_df)
+            df_current.set(new_df.copy())
+            add_log("Dataset Clínico cargado desde BD.")
+            return new_df
+        except Exception as e:
+            push_toast("Error al leer la tabla de pacientes.", "error")
+            add_log(f"Error BD Pacientes: {str(e)}")
+            return None
+
+    def _load_inventory_dataset():
+        try:
+            engine = connect_bd()
+            new_df = pd.read_sql("SELECT * FROM inventario", engine)
+            df_original.set(new_df)
+            df_current.set(new_df.copy())
+            add_log("Dataset Logístico cargado desde BD.")
+            return new_df
+        except Exception as e:
+            push_toast("Error al leer la tabla de inventario.", "error")
+            add_log(f"Error BD Inventario: {str(e)}")
+            return None
+
+    def _preprocess_patient_dataset():
+        df = df_current()
+        if df is None:
+            return None
+
+        df_next = df.copy()
+
+        keep_raw_cols = ["patient_code"]
+
+        scale_sources = [
+            "Age",
+            "TSH_Level",
+            "T3_Level",
+            "T4_Level",
+            "Nodule_Size",
+        ]
+
+        encode_sources = [
+            "Family_History",
+            "Radiation_Exposure",
+            "Iodine_Deficiency",
+            "Smoking",
+            "Obesity",
+            "Diabetes",
+            "Thyroid_Cancer_Risk",
+        ]
+
+        scaled_cols = []
+        encoded_cols = []
+        missing_cols = []
+        current_encoding_dict = dict(encoding_state())
+
+        for source_col in scale_sources:
+            if source_col not in df_next.columns:
+                missing_cols.append(source_col)
+                continue
+
+            numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
+            if numeric_data.isna().all():
+                missing_cols.append(source_col)
+                continue
+
+            scaled_col = f"{source_col}_scaled"
+            df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
+            scaled_cols.append(scaled_col)
+
+        for source_col in encode_sources:
+            if source_col not in df_next.columns:
+                missing_cols.append(source_col)
+                continue
+
+            encoder = LabelEncoder()
+            df_next[source_col] = encoder.fit_transform(df_next[source_col].astype(str))
+            encoded_cols.append(source_col)
+            current_encoding_dict[source_col] = {
+                str(class_name): int(i) for i, class_name in enumerate(encoder.classes_)
+            }
+
+        keep_cols = [col for col in keep_raw_cols + scaled_cols + encoded_cols if col in df_next.columns]
+        df_next = df_next[keep_cols]
+
+        encoding_state.set(current_encoding_dict)
+        df_current.set(df_next)
+        dtype_manual_state.set({})
+
+        return {"df": df_next, "missing_cols": missing_cols}
+
+    def _preprocess_inventory_dataset():
+        df = df_current()
+        if df is None:
+            return None
+
+        df_next = df.copy()
+
+        keep_raw_cols = ["resource_code", "warehouse_inventory_level"]
+
+        scale_sources = [
+            "handling_equipment_availability",
+            "weather_condition_severity",
+            "shipping_costs",
+            "supplier_reliability_score",
+            "lead_time_days",
+            "historical_demand",
+            "route_risk_level",
+            "customs_clearance_time",
+            "disruption_likelihood_score",
+            "delay_probability",
+            "delivery_time_deviation",
+        ]
+
+        scaled_cols = []
+        missing_cols = []
+
+        for source_col in scale_sources:
+            if source_col not in df_next.columns:
+                missing_cols.append(source_col)
+                continue
+
+            numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
+            if numeric_data.isna().all():
+                missing_cols.append(source_col)
+                continue
+
+            scaled_col = f"{source_col}_scaled"
+            df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
+            scaled_cols.append(scaled_col)
+
+        keep_cols = [col for col in keep_raw_cols + scaled_cols if col in df_next.columns]
+        df_next = df_next[keep_cols]
+
+        df_current.set(df_next)
+        dtype_manual_state.set({})
+
+        return {"df": df_next, "missing_cols": missing_cols}
+
+    def _auto_train_patient_model():
+        df = df_current()
+        if df is None or "patient_code" not in df.columns or "Thyroid_Cancer_Risk" not in df.columns:
+            return False
+
+        target = "Thyroid_Cancer_Risk"
+        features = [c for c in df.columns if c not in {"patient_code", target}]
+        if not features:
+            return False
+
+        model_state, global_state = build_classification_model_core(df, target, features, encoding_state=encoding_state())
+        model_results_state.set(model_state)
+        classification_model_state.set(global_state)
+        model_prediction_state.set(None)
+        add_log(f"Modelo clínico autoentrenado para {target} con {len(features)} variables.")
+        return True
+
+    def _auto_train_inventory_model():
+        df = df_current()
+        if df is None or "resource_code" not in df.columns:
+            return False
+
+        target = "warehouse_inventory_level" if "warehouse_inventory_level" in df.columns else "_warehouse_inventory_level"
+        if target not in df.columns:
+            return False
+
+        features = [c for c in df.columns if c not in {"resource_code", target}]
+        if not features:
+            return False
+
+        model_state, global_state = build_svr_model_core(df, target, features)
+        model_results_state.set(model_state)
+        regression_model_state.set(global_state)
+        model_prediction_state.set(None)
+        add_log(f"Modelo logístico autoentrenado para {target} con {len(features)} variables.")
+        return True
+
     # ── Load default CSV on startup
     @reactive.Effect
     def _load_default():
@@ -269,13 +453,17 @@ def server(input, output, session):
     @reactive.Effect
     @reactive.event(input.nav_patient_search, input.quick_patient)
     def _nav_patient():
-        _ensure_patient_data() # Carga de la BD si es necesario
+        _load_patient_dataset()
+        _preprocess_patient_dataset()
+        _auto_train_patient_model()
         current_page.set("patient_search")
 
     @reactive.Effect
     @reactive.event(input.nav_resource_availability, input.quick_resource)
     def _nav_resource():
-        _ensure_resource_data() # Carga de la BD si es necesario
+        _load_inventory_dataset()
+        _preprocess_inventory_dataset()
+        _auto_train_inventory_model()
         current_page.set("resource_availability")
 
 
@@ -407,182 +595,52 @@ def server(input, output, session):
     @reactive.Effect
     @reactive.event(input.load_patients_db)
     def _load_patients_from_db():
-        try:
-            engine = connect_bd()
-            df = pd.read_sql("SELECT * FROM pacientes", engine)
-            
-            # Actualizamos los estados globales igual que cuando cargas un CSV
-            df_original.set(df.copy())
-            df_current.set(df.copy())
+        df = _load_patient_dataset()
+        if df is not None:
             ops_log.set([f"Dataset Clínico cargado desde BD ({df.shape[0]} filas × {df.shape[1]} cols)"])
             push_toast("Dataset de Pacientes cargado correctamente.", "success")
-        except Exception as e:
-            push_toast("Error al leer la tabla de pacientes.", "error")
-            add_log(f"Error BD Pacientes: {str(e)}")
 
     @reactive.Effect
     @reactive.event(input.load_inventory_db)
     def _load_inventory_from_db():
-        try:
-            engine = connect_bd()
-            df = pd.read_sql("SELECT * FROM inventario", engine)
-            
-            df_original.set(df.copy())
-            df_current.set(df.copy())
+        df = _load_inventory_dataset()
+        if df is not None:
             ops_log.set([f"Dataset Logístico cargado desde BD ({df.shape[0]} filas × {df.shape[1]} cols)"])
             push_toast("Dataset de Inventario cargado correctamente.", "success")
-        except Exception as e:
-            push_toast("Error al leer la tabla de inventario.", "error")
-            add_log(f"Error BD Inventario: {str(e)}")
 
     @reactive.Effect
     @reactive.event(input.preprocess_patients_db)
     def _preprocess_patients_db():
-        _ensure_patient_data()
-        
-        df = df_current()
-        if df is None:
+        result = _preprocess_patient_dataset()
+        if result is None:
             push_toast("No hay datos de pacientes cargados para preprocesar.", "error")
             return
-        
-        df_next = df.copy()
-        
-        keep_raw_cols = ["patient_code"]
-        
-        scale_sources = [
-            "Age",
-            "TSH_Level",
-            "T3_Level",
-            "T4_Level",
-            "Nodule_Size"
-        ]
-        
-        encode_sources = [
-            "Family_History",
-            "Radiation_Exposure",
-            "Iodine_Deficiency",
-            "Smoking",
-            "Obesity",
-            "Diabetes",
-            "Thyroid_Cancer_Risk",
-        ]
-        scaled_cols = []
-        encoded_cols = []
-        missing_cols = []
-
-        try:
-            for source_col in scale_sources:
-                if source_col not in df_next.columns:
-                    missing_cols.append(source_col)
-                    continue
-
-                numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
-                if numeric_data.isna().all():
-                    missing_cols.append(source_col)
-                    continue
-
-                scaled_col = f"{source_col}_scaled"
-                df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
-                scaled_cols.append(scaled_col)
-
-            for source_col in encode_sources:
-                if source_col not in df_next.columns:
-                    missing_cols.append(source_col)
-                    continue
-
-                encoder = LabelEncoder()
-                df_next[source_col] = encoder.fit_transform(df_next[source_col].astype(str))
-                encoded_cols.append(source_col)
-
-            keep_cols = [col for col in keep_raw_cols + scaled_cols + encoded_cols if col in df_next.columns]
-            df_next = df_next[keep_cols]
-
-            df_current.set(df_next)
-            dtype_manual_state.set({})
-
-            if missing_cols:
-                add_log(
-                    "Preprocesamiento pacientes: columnas no encontradas o sin valores válidos para procesar: "
-                    + ", ".join(missing_cols)
-                )
-
+        if result["missing_cols"]:
             add_log(
-                "Preprocesamiento pacientes aplicado: StandardScaler en variables numéricas y LabelEncoder en variables categóricas."
+                "Preprocesamiento pacientes: columnas no encontradas o sin valores válidos para procesar: "
+                + ", ".join(result["missing_cols"])
             )
-            push_toast("Pacientes preprocesados correctamente.", "success")
-
-        except Exception as e:
-            push_toast(f"Error al preprocesar pacientes: {str(e)}", "error")
-            add_log(f"Error en preprocesamiento de pacientes: {str(e)}")
+        add_log(
+            "Preprocesamiento pacientes aplicado: StandardScaler en variables numéricas y LabelEncoder en variables categóricas."
+        )
+        push_toast("Pacientes preprocesados correctamente.", "success")
     
     @reactive.Effect
     @reactive.event(input.preprocess_inventory_db)
     def _preprocess_inventory_db():
-        _ensure_resource_data()
-
-        df = df_current()
-        if df is None:
+        result = _preprocess_inventory_dataset()
+        if result is None:
             push_toast("No hay datos de inventario cargados para preprocesar.", "error")
             return
-
-        df_next = df.copy()
-
-        # Columnas que se conservan sin escalar.
-        keep_raw_cols = ["resource_code", "warehouse_inventory_level"]
-
-        # Columnas que se escalan con StandardScaler y luego se conservan como *_scaled.
-        scale_sources = [
-            "handling_equipment_availability",
-            "weather_condition_severity",
-            "shipping_costs",
-            "supplier_reliability_score",
-            "lead_time_days",
-            "historical_demand",
-            "route_risk_level",
-            "customs_clearance_time",
-            "disruption_likelihood_score",
-            "delay_probability",
-            "delivery_time_deviation",
-        ]
-
-        scaled_cols = []
-        missing_cols = []
-
-        try:
-            for source_col in scale_sources:
-                if source_col not in df_next.columns:
-                    missing_cols.append(source_col)
-                    continue
-
-                numeric_data = pd.to_numeric(df_next[source_col], errors="coerce")
-                if numeric_data.isna().all():
-                    missing_cols.append(source_col)
-                    continue
-
-                scaled_col = f"{source_col}_scaled"
-                df_next[scaled_col] = StandardScaler().fit_transform(numeric_data.to_frame()).ravel()
-                scaled_cols.append(scaled_col)
-
-            keep_cols = [col for col in keep_raw_cols + scaled_cols if col in df_next.columns]
-            df_next = df_next[keep_cols]
-
-            df_current.set(df_next)
-            dtype_manual_state.set({})
-
-            if missing_cols:
-                add_log(
-                    "Preprocesamiento inventario: columnas no encontradas o sin valores numéricos para escalar: "
-                    + ", ".join(missing_cols)
-                )
-
+        if result["missing_cols"]:
             add_log(
-                "Preprocesamiento inventario aplicado: StandardScaler en variables numéricas y recorte de columnas finales."
+                "Preprocesamiento inventario: columnas no encontradas o sin valores numéricos para escalar: "
+                + ", ".join(result["missing_cols"])
             )
-            push_toast("Inventario preprocesado correctamente.", "success")
-
-        except Exception as e:
-            push_toast(f"Error al preprocesar inventario: {str(e)}", "error")
-            add_log(f"Error en preprocesamiento de inventario: {str(e)}")
+        add_log(
+            "Preprocesamiento inventario aplicado: StandardScaler en variables numéricas y recorte de columnas finales."
+        )
+        push_toast("Inventario preprocesado correctamente.", "success")
 
     # ── Upload handlers
     @reactive.Effect
@@ -699,7 +757,17 @@ def server(input, output, session):
     register_scale_handlers(input, output, df_current, add_log)
     register_outlier_handlers(input, output, df_current, add_log)
     register_drop_handlers(input, output, df_current, df_original, dtype_manual_state, ops_log, add_log)
-    register_model_handlers(input,output,df_current,add_log,encoding_state,classification_model_state,regression_model_state)    
+    register_model_handlers(
+        input,
+        output,
+        df_current,
+        add_log,
+        encoding_state,
+        classification_model_state,
+        regression_model_state,
+        model_results_state,
+        model_prediction_state,
+    )    
     register_patient_search_handlers(input,output,df_original,df_current,classification_model_state)
     register_resource_availability_handlers(input,output,df_original,df_current,regression_model_state)
     register_export_handlers(input, output, df_current)
