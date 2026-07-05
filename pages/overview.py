@@ -25,6 +25,20 @@ def _normalize_dtype_name(dtype_name):
 
 def render_overview(df, load_config, dtype_manual_state):
     """Render the overview page"""
+    def _db_actions_card():
+        return ui.div(
+            ui.div(
+                ui.input_action_button("load_patients_db", "⬇️ Cargar Pacientes (BD)", class_="btn btn-info"),
+                ui.input_action_button("preprocess_patients_db", "Preprocesar", class_="btn btn-info"),
+                class_="card"
+                ),
+            ui.div(
+                ui.input_action_button("load_inventory_db", "⬇️ Cargar Inventario (BD)", class_="btn btn-info"),
+                ui.input_action_button("preprocess_inventory_db", "Preprocesar", class_="btn btn-info"),
+                class_="card"
+                )
+        )
+
     if df is None:
         return ui.div(
             ui.div(ui.tags.h2("Dataset Overview", class_="section-title"), ui.p("Carga un dataset para empezar a trabajar", class_="section-sub")),
@@ -42,16 +56,7 @@ def render_overview(df, load_config, dtype_manual_state):
                 ui.div(ui.tags.small("El botón de archivo abre el selector del sistema. La configuración se conserva durante la sesión."), style="color:var(--muted);"),
                 class_="card",
             ),
-            ui.div(
-                ui.input_action_button("load_patients_db", "⬇️ Cargar Pacientes (BD)", class_="btn btn-info"),
-                ui.input_action_button("preprocess_patients_db", "Preprocesar", class_="btn btn-info"),
-                class_="card"
-            ),
-            ui.div(
-                ui.input_action_button("load_inventory_db", "⬇️ Cargar Inventario (BD)", class_="btn btn-info"),
-                ui.input_action_button("preprocess_inventory_db", "Preprocesar", class_="btn btn-info"),
-                class_="card"
-            ),
+            _db_actions_card(),
             ui.div(
                 ui.div("ESTADO", class_="card-title"),
                 ui.div("No hay dataset cargado todavía. Usa el botón anterior para seleccionar un archivo.", style="color:var(--muted);"),
@@ -144,6 +149,7 @@ def render_overview(df, load_config, dtype_manual_state):
             class_="card",
             style="margin-bottom:16px;",
         ),
+        _db_actions_card(),
         ui.div(
             ui.div(ui.tags.span(str(n_rows), class_="stat-value"), ui.tags.span("FILAS", class_="stat-label"), class_="stat-card"),
             ui.div(ui.tags.span(str(n_cols), class_="stat-value"), ui.tags.span("COLUMNAS", class_="stat-label"), class_="stat-card"),
