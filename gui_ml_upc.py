@@ -410,6 +410,15 @@ def server(input, output, session):
         add_log(f"Modelo clínico autoentrenado para {target} con {len(features)} variables.")
         return True
 
+    def _run_patient_workflow(force_retrain=False):
+        if force_retrain:
+            _load_patient_dataset()
+            _preprocess_patient_dataset()
+        trained = _auto_train_patient_model()
+        if trained:
+            push_toast("Modelo clínico listo.", "success")
+        return trained
+
     def _auto_train_inventory_model():
         df = df_current()
         if df is None or "resource_code" not in df.columns:
@@ -429,6 +438,15 @@ def server(input, output, session):
         model_prediction_state.set(None)
         add_log(f"Modelo logístico autoentrenado para {target} con {len(features)} variables.")
         return True
+
+    def _run_inventory_workflow(force_retrain=False):
+        if force_retrain:
+            _load_inventory_dataset()
+            _preprocess_inventory_dataset()
+        trained = _auto_train_inventory_model()
+        if trained:
+            push_toast("Modelo de inventario listo.", "success")
+        return trained
 
     # ── Load default CSV on startup
     @reactive.Effect
@@ -455,15 +473,73 @@ def server(input, output, session):
     def _nav_patient():
         _load_patient_dataset()
         _preprocess_patient_dataset()
-        _auto_train_patient_model()
         current_page.set("patient_search")
+
+        if classification_model_state() is not None:
+            ui.modal_show(
+                ui.modal(
+                    "Reentrenar modelo de pacientes",
+                    ui.p("Ya existe un modelo clínico entrenado. ¿Deseas volver a entrenarlo al abrir Consulta Paciente?"),
+                    ui.div(
+                        ui.input_action_button("patient_retrain_yes", "Sí, reentrenar", class_="btn btn-primary"),
+                        ui.input_action_button("patient_retrain_no", "No, usar el actual", class_="btn btn-secondary"),
+                        class_="ctrl-row"
+                    ),
+                    easy_close=False,
+                )
+            )
+            return
+
+        _auto_train_patient_model()
 
     @reactive.Effect
     @reactive.event(input.nav_resource_availability, input.quick_resource)
     def _nav_resource():
         _load_inventory_dataset()
         _preprocess_inventory_dataset()
+        current_page.set("resource_availability")
+
+        if regression_model_state() is not None:
+            ui.modal_show(
+                ui.modal(
+                    "Reentrenar modelo de inventario",
+                    ui.p("Ya existe un modelo de inventario entrenado. ¿Deseas volver a entrenarlo al abrir Estado de Recursos?"),
+                    ui.div(
+                        ui.input_action_button("resource_retrain_yes", "Sí, reentrenar", class_="btn btn-primary"),
+                        ui.input_action_button("resource_retrain_no", "No, usar el actual", class_="btn btn-secondary"),
+                        class_="ctrl-row"
+                    ),
+                    easy_close=False,
+                )
+            )
+            return
+
         _auto_train_inventory_model()
+
+    @reactive.Effect
+    @reactive.event(input.patient_retrain_yes)
+    def _patient_retrain_yes():
+        ui.modal_remove()
+        _auto_train_patient_model()
+        current_page.set("patient_search")
+
+    @reactive.Effect
+    @reactive.event(input.patient_retrain_no)
+    def _patient_retrain_no():
+        ui.modal_remove()
+        current_page.set("patient_search")
+
+    @reactive.Effect
+    @reactive.event(input.resource_retrain_yes)
+    def _resource_retrain_yes():
+        ui.modal_remove()
+        _auto_train_inventory_model()
+        current_page.set("resource_availability")
+
+    @reactive.Effect
+    @reactive.event(input.resource_retrain_no)
+    def _resource_retrain_no():
+        ui.modal_remove()
         current_page.set("resource_availability")
 
 

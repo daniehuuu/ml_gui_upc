@@ -1120,4 +1120,8 @@ label { color: var(--muted) !important; font-size: 11px !important; font-family:
     border-top: none;
     margin-top: 8px;
 }
+
+.modal-body{
+  color: var(--muted);
+}
 """
